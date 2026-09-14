@@ -6,12 +6,15 @@
  *   QuranText/catalog.json                 - index of the tafsir/translation
  *                                            files that are available (built
  *                                            by tools/download-tanzil-translations.ps1)
+ *   QuranAudio/reciters.json               - list of reciter folders with ayah
+ *                                            audio (built by tools/build-reciter-list.ps1)
  * The tafsir and translation files are fetched the first time they are picked,
  * so the page does not download dozens of megabytes on start-up.
  * ------------------------------------------------------------------------ */
 const SOURCE_UTHMANI = 'QuranText/Quran/quran-uthmani.xml';
 const SOURCE_CLEAN = 'QuranText/Quran/quran-simple-clean.xml';
 const SOURCE_CATALOG = 'QuranText/catalog.json';
+const SOURCE_RECITERS = 'QuranAudio/reciters.json';
 
 /* Search results are rendered in pages so common words stay responsive.
  * A page is drawn in small chunks: the first chunk appears immediately, the
@@ -60,6 +63,11 @@ const SOURCE_CACHE_LIMIT = 4;
 const SOURCES_STORAGE_KEY = 'quran-sources';
 const LEGACY_STORAGE_KEYS = ['quran-tafsir', 'quran-translation'];
 const DEFAULT_SOURCES = ['ar.jalalayn', 'en.sahih'];
+const RECITER_STORAGE_KEY = 'quran-reciter';
+const CONTINUOUS_STORAGE_KEY = 'quran-continuous';
+
+/* A short breath between two ayah files. */
+const AYAH_GAP_MS = 250;
 
 var surasTashkeel;
 var surasClean;
@@ -71,6 +79,14 @@ var sourceCache = {};      // source id -> parsed <sura> elements
 var sourceCacheOrder = []; // the ids above in the order they were added
 var pickerElements = { toggle: null, panel: null, count: null, list: null };
 var pickerIsOpen = false;
+var reciters = [];         // [{ id, name }] of the audio folders
+var selectedReciterId = null;
+var audioPlayer = null;    // one shared player for the whole page
+var preloader = null;      // warms up the file that plays next
+var playback = { surah: null, ayah: null }; // what the player is on now
+var continuousPlay = false;
+var highlightedTrack = null; // 'surah:ayah' of the ayah that is marked now
+var nextTrackTimer = null;  // pending start of the next file
 
 let selectedSurah = null; // Variable to track selected Surah
 let currentMatches = [];  // Matches of the last search query
@@ -83,13 +99,16 @@ let toastTimer = null;    // Hides the status message again
 Promise.all([
     loadXml(SOURCE_UTHMANI).then(function (data) { surasTashkeel = data; }),
     loadXml(SOURCE_CLEAN).then(function (data) { surasClean = data; }),
-    loadCatalog()
+    loadCatalog(),
+    loadReciters()
 ]).then(function () {
     setupSourcePicker();
     restoreSources();
     return loadEnabledSources();
 }).then(function () {
-    console.log('Quran text loaded. Sources: ' + (enabledSources.join(', ') || 'none'));
+    console.log('Quran text loaded. Sources: ' + (enabledSources.join(', ') || 'none')
+        + ', reciters: ' + reciters.length);
+    setupReciterPicker();
     initializePage();
     setupSearchBar(); // Call the function that initializes the page
 }).catch(error => {
@@ -137,6 +156,24 @@ function loadCatalog() {
         .catch(function (error) {
             console.warn('Could not read ' + SOURCE_CATALOG + ', using the built-in list.', error);
             catalog = FALLBACK_CATALOG;
+        });
+}
+
+/* Reads the list of reciter folders that hold the ayah audio files. */
+function loadReciters() {
+    return fetch(SOURCE_RECITERS)
+        .then(function (response) {
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function (data) {
+            reciters = Array.isArray(data) ? data : (data ? [data] : []);
+        })
+        .catch(function (error) {
+            console.warn('Could not read ' + SOURCE_RECITERS + ', recitation is off.', error);
+            reciters = [];
         });
 }
 
@@ -406,33 +443,297 @@ function trimSourceCache() {
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * Recitation: one shared player and a play button on every ayah
+ * ------------------------------------------------------------------------ */
+
+function setupReciterPicker() {
+    const picker = document.getElementById('reciter-picker');
+    const select = document.getElementById('reciter-select');
+    if (!picker || !select) {
+        return;
+    }
+
+    if (reciters.length === 0) {
+        picker.hidden = true;
+        return;
+    }
+
+    select.innerHTML = reciters.map(function (reciter) {
+        return '<option value="' + htmlEscape(reciter.id) + '">' + htmlEscape(reciter.name) + '</option>';
+    }).join('');
+
+    let stored = null;
+    try {
+        stored = localStorage.getItem(RECITER_STORAGE_KEY);
+    } catch (error) {
+        stored = null;
+    }
+
+    selectedReciterId = reciters.some(function (reciter) {
+        return reciter.id === stored;
+    }) ? stored : reciters[0].id;
+    select.value = selectedReciterId;
+
+    select.addEventListener('change', function () {
+        selectedReciterId = select.value;
+        try {
+            localStorage.setItem(RECITER_STORAGE_KEY, selectedReciterId);
+        } catch (error) {
+            // Ignore storage errors (private mode, storage disabled, ...)
+        }
+        stopPlayback();
+    });
+}
+
+/* The continuous play switch in the toolbar. */
+function setupRepeatToggle() {
+    const button = document.getElementById('repeat-toggle');
+    if (!button) {
+        return;
+    }
+    if (reciters.length === 0) {
+        button.hidden = true;
+        return;
+    }
+
+    try {
+        continuousPlay = localStorage.getItem(CONTINUOUS_STORAGE_KEY) === '1';
+    } catch (error) {
+        continuousPlay = false;
+    }
+    syncRepeatToggle(button);
+
+    button.addEventListener('click', function () {
+        continuousPlay = !continuousPlay;
+        syncRepeatToggle(button);
+        try {
+            localStorage.setItem(CONTINUOUS_STORAGE_KEY, continuousPlay ? '1' : '0');
+        } catch (error) {
+            // Ignore storage errors (private mode, storage disabled, ...)
+        }
+    });
+}
+
+function syncRepeatToggle(button) {
+    button.classList.toggle('is-active', continuousPlay);
+    button.setAttribute('aria-pressed', continuousPlay ? 'true' : 'false');
+}
+
+/* Play button handler: plays exactly the file behind the button. */
+function playAyah(surahIndex, fileNumber) {
+    if (!selectedReciterId) {
+        return;
+    }
+
+    cancelScheduledTrack();
+    startTrack(surahIndex, fileNumber);
+}
+
+/* Plays or pauses one file; file 0 is the basmala that opens a surah. */
+function startTrack(surahIndex, fileNumber) {
+    if (audioPlayer && playback.surah === surahIndex && playback.ayah === fileNumber) {
+        if (audioPlayer.paused) {
+            audioPlayer.play();
+        } else {
+            audioPlayer.pause();
+        }
+        updatePlaybackUI();
+        return;
+    }
+
+    if (!audioPlayer) {
+        audioPlayer = new Audio();
+        audioPlayer.addEventListener('play', updatePlaybackUI);
+        audioPlayer.addEventListener('pause', updatePlaybackUI);
+        audioPlayer.addEventListener('ended', function () {
+            const next = continuousPlay ? nextTrack(playback.surah, playback.ayah) : null;
+            if (next) {
+                scheduleTrack(next);
+            } else {
+                playback.surah = null;
+                playback.ayah = null;
+                updatePlaybackUI();
+            }
+        });
+        audioPlayer.addEventListener('error', function () {
+            const error = audioPlayer.error;
+            if (!error || error.code === 1) {
+                return; // 1 = aborted, which usually means another ayah was picked
+            }
+
+            const failed = { surah: playback.surah, ayah: playback.ayah };
+            const isCurrent = playback.surah === failed.surah && playback.ayah === failed.ayah;
+            console.error('Could not load ' + audioPlayer.src, error);
+
+            // A missing basmala file should not stop the recitation.
+            if (isCurrent && failed.ayah === 0 && failed.surah !== null) {
+                playback.surah = null;
+                playback.ayah = null;
+                updatePlaybackUI();
+                showToast('ملف البسملة غير متوفّر، تم تخطّيه.');
+                startTrack(failed.surah, 1);
+                return;
+            }
+
+            if (isCurrent) {
+                playback.surah = null;
+                playback.ayah = null;
+                updatePlaybackUI();
+            }
+            showToast(error.code === 2
+                ? 'تعذّر الوصول إلى ملفات التلاوة. تأكّد من تشغيل الخادم.'
+                : 'ملف التلاوة غير موجود.');
+        });
+    }
+
+    playback.surah = surahIndex;
+    playback.ayah = fileNumber;
+    audioPlayer.src = recitationPath(surahIndex, fileNumber);
+    audioPlayer.play().catch(function () {
+        // Real failures are reported by the error listener above.
+    });
+    updatePlaybackUI();
+    preloadNextTrack();
+}
+
+/* Where the recitation goes after this file: the next ayah, then the next surah. */
+function nextTrack(surahIndex, fileNumber) {
+    if (surahIndex === null || fileNumber === null) {
+        return null;
+    }
+    if (fileNumber < surasTashkeel[surahIndex].children.length) {
+        return { surah: surahIndex, ayah: fileNumber + 1 };
+    }
+    if (surahIndex < 113) {
+        const nextSurah = surahIndex + 1;
+        // A surah is opened with its basmala (file 0); surah 9 has none.
+        return { surah: nextSurah, ayah: nextSurah === 8 ? 1 : 0 };
+    }
+    return null; // End of the Quran
+}
+
+/* Continuous play: follow the recitation into the next ayah or surah. */
+function playNextTrack(next) {
+    if (next.surah !== playback.surah) {
+        selectSurah(next.surah);
+        closeSurahNav();
+        renderSurah(next.surah);
+    }
+    startTrack(next.surah, next.ayah);
+}
+
+/* A very short pause between two files of the recitation. */
+function scheduleTrack(next) {
+    cancelScheduledTrack();
+    nextTrackTimer = setTimeout(function () {
+        nextTrackTimer = null;
+        playNextTrack(next);
+    }, AYAH_GAP_MS);
+}
+
+function cancelScheduledTrack() {
+    if (nextTrackTimer !== null) {
+        clearTimeout(nextTrackTimer);
+        nextTrackTimer = null;
+    }
+}
+
+/* Warms up the next file, so a continuous recitation barely pauses. */
+function preloadNextTrack() {
+    const next = nextTrack(playback.surah, playback.ayah);
+    if (!next) {
+        return;
+    }
+    if (!preloader) {
+        preloader = new Audio();
+        preloader.preload = 'auto';
+    }
+    const path = recitationPath(next.surah, next.ayah);
+    if (!preloader.src || preloader.src.indexOf(path) === -1) {
+        preloader.src = path;
+    }
+}
+
+function stopPlayback() {
+    cancelScheduledTrack();
+    if (audioPlayer) {
+        audioPlayer.pause();
+    }
+    playback.surah = null;
+    playback.ayah = null;
+    updatePlaybackUI();
+}
+
+/* 002255.mp3 = sura 2, ayah 255; 002000.mp3 = the basmala of sura 2. */
+function recitationPath(surahIndex, fileNumber) {
+    return 'QuranAudio/' + encodeURIComponent(selectedReciterId) + '/'
+        + padNumber(surahIndex + 1) + padNumber(fileNumber) + '.mp3';
+}
+
+function padNumber(value) {
+    let text = String(value);
+    while (text.length < 3) {
+        text = '0' + text;
+    }
+    return text;
+}
+
+/* Keeps every play button and the highlighted file in sync with the player. */
+function updatePlaybackUI() {
+    const isPlaying = !!audioPlayer && !audioPlayer.paused && playback.surah !== null;
+    const isActive = isPlaying || nextTrackTimer !== null; // stays lit in the gap
+
+    document.querySelectorAll('.play-btn').forEach(function (button) {
+        const matches = isActive
+            && Number(button.dataset.surah) === playback.surah
+            && Number(button.dataset.ayah) === playback.ayah;
+        button.classList.toggle('is-playing', matches);
+        button.setAttribute('aria-label', matches ? 'إيقاف التلاوة مؤقتًا' : 'تشغيل التلاوة');
+    });
+
+    syncPlayingCard(isActive);
+}
+
+/* Marks the file that is being recited and keeps it on screen. */
+function syncPlayingCard(isActive) {
+    const track = isActive ? playback.surah + ':' + playback.ayah : null;
+    if (track === highlightedTrack) {
+        return;
+    }
+    highlightedTrack = track;
+
+    document.querySelectorAll('#maincontent .ayah.is-playing, #maincontent .basmala-row.is-playing')
+        .forEach(function (element) {
+            element.classList.remove('is-playing');
+        });
+
+    if (!track) {
+        return;
+    }
+
+    if (playback.ayah === 0) {
+        const basmalaRow = document.querySelector('#maincontent .basmala-row');
+        if (basmalaRow) {
+            basmalaRow.classList.add('is-playing');
+            basmalaRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        return;
+    }
+
+    const card = document.getElementById('ayah-' + playback.surah + '-' + (playback.ayah - 1));
+    if (card) {
+        card.classList.add('is-playing');
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
 /* Re-draws everything that shows a tafsir or a translation. */
 function afterSourceChange() {
-    updateHeroSub();
     if (selectedSurah !== null) {
         renderSurah(selectedSurah);
     }
     refreshSearchResults();
-}
-
-function updateHeroSub() {
-    const hero = document.getElementById('hero-sub');
-    if (!hero) {
-        return;
-    }
-
-    const parts = ['١١٤ سورة'];
-    if (enabledSources.length === 1) {
-        const entry = findCatalogEntry(enabledSources[0]);
-        if (entry) {
-            parts.push(htmlEscape(entry.name));
-        }
-    } else if (enabledSources.length === 2) {
-        parts.push('مصدران');
-    } else if (enabledSources.length > 2) {
-        parts.push(toArabicDigits(enabledSources.length) + ' مصادر');
-    }
-    hero.innerHTML = parts.join('<span>•</span>');
 }
 
 function htmlEscape(text) {
@@ -482,7 +783,7 @@ function initializePage() {
     });
     SurahText.innerHTML = emptyStateHTML();
     applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
-    updateHeroSub();
+    setupRepeatToggle();
 
     themeButton.addEventListener('click', function () {
         var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
@@ -543,9 +844,11 @@ function initializePage() {
         var randomSura = generateRandomNumber(0, 113);
         var randomAyahNumber = generateRandomNumber(0, surasTashkeel[randomSura].children.length - 1);
 
+        stopPlayback();
         clearSearch();
         selectSurah(randomSura);
         SurahText.innerHTML = surahHeadHTML(randomSura) + ayahCardHTML(randomSura, randomAyahNumber);
+        updatePlaybackUI();
         window.scrollTo({ top: 0, behavior: 'smooth' });
     });
 
@@ -557,6 +860,7 @@ function initializePage() {
 
     // Clear button functionality
     clearButton.addEventListener('click', function () {
+        stopPlayback();
         SurahText.innerHTML = emptyStateHTML(); // Clear the displayed surah and ayah
         clearSearch();                          // Clear the search field and the results
         clearSurahSelection();
@@ -566,6 +870,14 @@ function initializePage() {
     // Back to top button
     toTop.addEventListener('click', function () {
         window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    // One delegated listener serves every play button, including new ones.
+    SurahText.addEventListener('click', function (event) {
+        const playButton = event.target.closest('.play-btn');
+        if (playButton) {
+            playAyah(Number(playButton.dataset.surah), Number(playButton.dataset.ayah));
+        }
     });
 
     var syncToTopVisibility = function () {
@@ -948,12 +1260,27 @@ function sourceBlockHTML(id, surahIndex, ayahIndex, clamp) {
         + '</div>';
 }
 
+/* Small play/pause button of one ayah. `fileNumber` is what the audio file is
+ * called: the ayah number, or 0 for the basmala that opens a surah. */
+function ayahPlayButtonHTML(surahIndex, fileNumber) {
+    if (reciters.length === 0) {
+        return '';
+    }
+
+    return '<button class="play-btn" type="button" data-surah="' + surahIndex
+        + '" data-ayah="' + fileNumber + '" aria-label="تشغيل التلاوة" title="تشغيل التلاوة">'
+        + '<svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>'
+        + '<svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"></path></svg>'
+        + '</button>';
+}
+
 /* One ayah card: number, Uthmani text, tafsir and translation. */
 function ayahCardHTML(surahIndex, ayahIndex) {
     return '<article class="ayah" id="ayah-' + surahIndex + '-' + ayahIndex + '">'
         + '<div class="ayah__head">'
         + '<span class="ayah__num">' + toArabicDigits(ayahIndex + 1) + '</span>'
         + '<span class="ayah__rule" aria-hidden="true"></span>'
+        + ayahPlayButtonHTML(surahIndex, ayahIndex + 1)
         + '</div>'
         + '<p class="ayah__text quran-text" lang="ar">'
         + surasTashkeel[surahIndex].children[ayahIndex].getAttribute('text')
@@ -1045,8 +1372,11 @@ function renderSurah(index) {
 
     // Surah 1 already contains the basmala as its first ayah, surah 9 has none.
     if (index !== 0 && index !== 8) {
-        parts.push('<p class="basmala" lang="ar">'
-            + surasTashkeel[0].children[0].getAttribute('text') + '</p>');
+        parts.push('<div class="basmala-row">'
+            + '<p class="basmala" lang="ar">'
+            + surasTashkeel[0].children[0].getAttribute('text') + '</p>'
+            + ayahPlayButtonHTML(index, 0)
+            + '</div>');
     }
 
     for (let a = 0; a < surasTashkeel[index].children.length; a++) {
@@ -1054,9 +1384,13 @@ function renderSurah(index) {
     }
 
     SurahText.innerHTML = parts.join('');
+    updatePlaybackUI();
 }
 
 function ViewSurah(index, scrollToTop) {
+    if (playback.surah !== null && playback.surah !== index) {
+        stopPlayback(); // The player follows the surah that is on screen
+    }
     selectSurah(index);
     closeSurahNav();
     renderSurah(index);

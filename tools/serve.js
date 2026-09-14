@@ -20,6 +20,7 @@ const CONTENT_TYPES = {
     '.css': 'text/css; charset=utf-8',
     '.json': 'application/json; charset=utf-8',
     '.xml': 'application/xml; charset=utf-8',
+    '.mp3': 'audio/mpeg',
     '.ttf': 'font/ttf',
     '.woff2': 'font/woff2'
 };
@@ -34,16 +35,48 @@ http.createServer(function (request, response) {
         return;
     }
 
-    fs.readFile(filePath, function (error, data) {
-        if (error) {
+    fs.stat(filePath, function (statError, stats) {
+        if (statError || !stats.isFile()) {
             response.writeHead(404);
             response.end('Not found: ' + urlPath);
             return;
         }
-        response.writeHead(200, {
-            'Content-Type': CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
-        });
-        response.end(data);
+
+        const headers = {
+            'Content-Type': CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream',
+            'Cache-Control': 'no-cache', // always pick up the latest files
+            'Accept-Ranges': 'bytes'
+        };
+
+        // Media players ask for byte ranges; serving them keeps audio smooth.
+        const range = request.headers.range;
+        const rangeMatch = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+        if (rangeMatch) {
+            const start = rangeMatch[1] ? Number(rangeMatch[1]) : 0;
+            const end = rangeMatch[2] ? Number(rangeMatch[2]) : stats.size - 1;
+            if (start > end || end >= stats.size) {
+                response.writeHead(416, { 'Content-Range': 'bytes */' + stats.size });
+                response.end();
+                return;
+            }
+            headers['Content-Length'] = end - start + 1;
+            headers['Content-Range'] = 'bytes ' + start + '-' + end + '/' + stats.size;
+            response.writeHead(206, headers);
+            if (request.method === 'HEAD') {
+                response.end();
+                return;
+            }
+            fs.createReadStream(filePath, { start: start, end: end }).pipe(response);
+            return;
+        }
+
+        headers['Content-Length'] = stats.size;
+        response.writeHead(200, headers);
+        if (request.method === 'HEAD') {
+            response.end();
+            return;
+        }
+        fs.createReadStream(filePath).pipe(response);
     });
 }).listen(port, function () {
     console.log('Serving ' + root + ' on http://localhost:' + port);
