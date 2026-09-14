@@ -11,8 +11,15 @@ const SOURCE_CLEAN = 'https://voidwave.com/Quran/QuranText/Quran/quran-simple-cl
 const SOURCE_ENGLISH = 'https://voidwave.com/Quran/QuranText/English-Translation/en.sahih.xml';
 const SOURCE_TAFSIR = 'https://voidwave.com/Quran/QuranText/Arabic-Tafsir/ar.jalalayn.xml';
 
-/* Search results are rendered in batches so common words stay responsive. */
+/* Search results are rendered in pages so common words stay responsive.
+ * A page is drawn in small chunks: the first chunk appears immediately, the
+ * rest is added while the browser is idle. */
 const RESULTS_PER_PAGE = 120;
+const RESULTS_CHUNK = 24;
+
+/* Tafsir and translation are clamped to a few lines in result cards, so long
+ * excerpts are cut short before they reach the DOM. */
+const RESULTS_EXCERPT_LENGTH = 300;
 
 /* Arabic-Indic digits, used for surah and ayah numbers. */
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
@@ -29,6 +36,8 @@ let showEnglish = true; // Flag to track the visibility of English
 let selectedSurah = null; // Variable to track selected Surah
 let currentMatches = [];  // Matches of the last search query
 let renderedMatches = 0;  // Number of matches that are already on screen
+let resultsTarget = 0;    // Number of matches the loaded pages contain
+let renderHandle = null;  // Pending idle render of the next chunk
 let searchTimer = null;   // Debounce timer for the search field
 
 Promise.all([
@@ -258,8 +267,10 @@ function runSearch(scrollToResults) {
         return;
     }
 
+    cancelPendingRender();
     currentMatches = collectMatches(query);
     renderedMatches = 0;
+    resultsTarget = 0;
     resultsContainer.innerHTML = '';
 
     if (currentMatches.length === 0) {
@@ -301,39 +312,87 @@ function collectMatches(query) {
     return matches;
 }
 
-/* Appends the next batch of matches (long result lists stay responsive). */
+/* Adds the next page of matches, drawn in chunks so typing stays smooth. */
 function appendResultsPage() {
-    const resultsContainer = document.getElementById('search-results');
-    const pageEnd = Math.min(renderedMatches + RESULTS_PER_PAGE, currentMatches.length);
     const previousButton = document.getElementById('load-more');
-    let html = '';
 
+    cancelPendingRender();
     if (previousButton) {
         previousButton.remove();
     }
 
+    resultsTarget = Math.min(renderedMatches + RESULTS_PER_PAGE, currentMatches.length);
+
     if (renderedMatches === 0) {
-        html += '<p class="results-meta">' + toArabicDigits(currentMatches.length) + ' نتيجة'
+        document.getElementById('search-results').insertAdjacentHTML('beforeend',
+            '<p class="results-meta">' + toArabicDigits(currentMatches.length) + ' نتيجة'
             + (selectedSurah !== null ? ' في سورة ' + surahName(selectedSurah) : '')
-            + '</p>';
+            + '</p>');
     }
 
-    for (let i = renderedMatches; i < pageEnd; i++) {
+    renderNextChunk();
+}
+
+/* Renders one chunk, then hands the rest back to the browser's idle time. */
+function renderNextChunk() {
+    const resultsContainer = document.getElementById('search-results');
+    const chunkEnd = Math.min(renderedMatches + RESULTS_CHUNK, resultsTarget);
+    let html = '';
+
+    for (let i = renderedMatches; i < chunkEnd; i++) {
         html += searchResultHTML(currentMatches[i]);
     }
+    renderedMatches = chunkEnd;
 
-    if (pageEnd < currentMatches.length) {
-        html += '<button id="load-more" class="btn load-more" type="button">عرض المزيد ('
-            + toArabicDigits(currentMatches.length - pageEnd) + ' نتيجة)</button>';
+    if (html) {
+        resultsContainer.insertAdjacentHTML('beforeend', html);
     }
 
-    renderedMatches = pageEnd;
-    resultsContainer.insertAdjacentHTML('beforeend', html);
-
-    const nextButton = document.getElementById('load-more');
-    if (nextButton) {
-        nextButton.addEventListener('click', appendResultsPage);
+    if (renderedMatches < resultsTarget) {
+        renderHandle = scheduleIdle(renderNextChunk);
+    } else {
+        renderHandle = null;
+        addLoadMoreButton();
     }
+}
+
+function addLoadMoreButton() {
+    if (resultsTarget >= currentMatches.length) {
+        return;
+    }
+
+    const resultsContainer = document.getElementById('search-results');
+    resultsContainer.insertAdjacentHTML('beforeend',
+        '<button id="load-more" class="btn load-more" type="button">عرض المزيد ('
+        + toArabicDigits(currentMatches.length - resultsTarget) + ' نتيجة)</button>');
+    document.getElementById('load-more').addEventListener('click', appendResultsPage);
+}
+
+function scheduleIdle(callback) {
+    if (typeof requestIdleCallback === 'function') {
+        return requestIdleCallback(callback, { timeout: 500 });
+    }
+    return setTimeout(callback, 24);
+}
+
+function cancelPendingRender() {
+    if (renderHandle === null) {
+        return;
+    }
+    if (typeof cancelIdleCallback === 'function') {
+        cancelIdleCallback(renderHandle);
+    } else {
+        clearTimeout(renderHandle);
+    }
+    renderHandle = null;
+}
+
+/* Shortens a long excerpt; the card clamps the text to three lines anyway. */
+function excerpt(text) {
+    if (!text || text.length <= RESULTS_EXCERPT_LENGTH) {
+        return text;
+    }
+    return text.slice(0, RESULTS_EXCERPT_LENGTH).replace(/\s+\S*$/, '') + '…';
 }
 
 /* Clears the search field and everything that was rendered for it. */
@@ -349,6 +408,8 @@ function clearSearch() {
     }
     currentMatches = [];
     renderedMatches = 0;
+    resultsTarget = 0;
+    cancelPendingRender();
 }
 
 function normalizeArabic(text) {
@@ -543,7 +604,7 @@ function searchResultHTML(match) {
         if (tafsir) {
             html += '<div class="ayah__block">'
                 + '<span class="ayah__label">تفسير الجلالين</span>'
-                + '<p class="ayah__tafsir clamp-text">' + tafsir + '</p>'
+                + '<p class="ayah__tafsir clamp-text">' + excerpt(tafsir) + '</p>'
                 + '</div>';
         }
     }
@@ -553,7 +614,7 @@ function searchResultHTML(match) {
         if (english) {
             html += '<div class="ayah__block" dir="ltr">'
                 + '<span class="ayah__label">English</span>'
-                + '<p class="ayah__english clamp-text">' + english + '</p>'
+                + '<p class="ayah__english clamp-text">' + excerpt(english) + '</p>'
                 + '</div>';
         }
     }
@@ -613,6 +674,15 @@ function closeSurahNav() {
     }
     if (showNav) {
         showNav.setAttribute('aria-expanded', 'false');
+    }
+
+    // The list always opens unfiltered again.
+    const filter = document.getElementById('surah-filter');
+    if (filter && filter.value) {
+        filter.value = '';
+        list.querySelectorAll('.surah').forEach(function (button) {
+            button.hidden = false;
+        });
     }
 }
 

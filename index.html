@@ -247,10 +247,15 @@
             background: linear-gradient(180deg, var(--accent-strong), var(--accent-strong));
         }
 
-        .btn--tool.is-active {
+        .btn.is-active {
             border-color: var(--accent-ring);
             background: var(--accent-soft);
             color: var(--accent);
+        }
+
+        .btn.is-active:hover {
+            border-color: var(--accent);
+            background: var(--accent-soft);
         }
 
         /* ------------------------------------------------------------------
@@ -279,6 +284,7 @@
 
         .appbar__tools {
             display: flex;
+            flex-wrap: wrap;
             gap: 8px;
             align-items: center;
         }
@@ -894,6 +900,16 @@
                 bottom: calc(12px + env(safe-area-inset-bottom));
             }
         }
+
+        @media (max-width: 380px) {
+            .appbar__tools {
+                gap: 4px;
+            }
+
+            .btn {
+                padding: 8px 8px;
+            }
+        }
     </style>
 
 
@@ -923,7 +939,7 @@
                         </svg>
                     </span>
                     <input type="text" id="search-bar" placeholder="ابحث في القرآن الكريم..." autocomplete="off"
-                        spellcheck="false" disabled>
+                        spellcheck="false" enterkeyhint="search" disabled>
                     <button id="search-button" class="btn" type="button" aria-label="Search" title="ابحث" disabled>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" aria-hidden="true">
