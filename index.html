@@ -33,7 +33,7 @@
 
         @font-face {
             font-family: 'Uthmanic';
-            src: url('https://voidwave.com/Quran/fonts/uthmanic_hafs_v22.ttf') format('truetype');
+            src: url('fonts/uthmanic_hafs_v22.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
             font-display: swap;
@@ -256,6 +256,149 @@
         .btn.is-active:hover {
             border-color: var(--accent);
             background: var(--accent-soft);
+        }
+
+        /* ------------------------------------------------------------------
+           Source picker (tafsir / translation check boxes)
+        ------------------------------------------------------------------ */
+        .picker {
+            position: relative;
+            display: inline-flex;
+        }
+
+        .picker__count {
+            display: inline-grid;
+            place-items: center;
+            min-width: 22px;
+            height: 22px;
+            padding: 0 6px;
+            border-radius: 999px;
+            background: var(--accent);
+            color: var(--on-accent);
+            font-family: var(--font-ar);
+            font-size: 0.8rem;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .picker__panel {
+            position: absolute;
+            z-index: 40;
+            top: calc(100% + 8px);
+            left: 8px;
+            width: min(360px, calc(100vw - 24px));
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .picker__list {
+            max-height: min(62vh, 430px);
+            padding: 8px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+        }
+
+        .picker__group {
+            margin: 10px 8px 6px;
+            color: var(--muted);
+            font-family: var(--font-ar);
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+        }
+
+        .picker__group:first-child {
+            margin-top: 2px;
+        }
+
+        .source-option {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding: 8px 10px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 140ms ease, opacity 140ms ease;
+        }
+
+        .source-option:hover {
+            background: var(--surface-2);
+        }
+
+        .source-option.is-loading {
+            opacity: 0.5;
+        }
+
+        .source-option input {
+            flex: 0 0 auto;
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .flag {
+            flex: 0 0 auto;
+            width: 22px;
+            height: 15px;
+            border-radius: 2px;
+            box-shadow: 0 0 0 1px var(--border);
+            object-fit: cover;
+        }
+
+        .source-option__text {
+            display: grid;
+            flex: 1 1 auto;
+            min-width: 0;
+            gap: 1px;
+        }
+
+        .source-option__name {
+            font-family: var(--font-ar);
+            font-size: 0.95rem;
+            font-weight: 600;
+            line-height: 1.35;
+        }
+
+        .source-option__meta {
+            overflow: hidden;
+            color: var(--muted);
+            font-family: var(--font-ui);
+            font-size: 0.74rem;
+            line-height: 1.35;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        /* Small status message (for example when a file cannot be loaded). */
+        .toast {
+            position: fixed;
+            z-index: 50;
+            inset-inline: 0;
+            bottom: calc(76px + env(safe-area-inset-bottom));
+            width: fit-content;
+            max-width: min(92vw, 460px);
+            margin: 0 auto;
+            padding: 10px 16px;
+            border: 1px solid var(--border-strong);
+            border-radius: 999px;
+            background: var(--surface-3);
+            color: var(--text);
+            font-family: var(--font-ar);
+            font-size: 0.95rem;
+            box-shadow: var(--shadow);
+            opacity: 0;
+            transform: translateY(8px);
+            pointer-events: none;
+            transition: opacity 200ms ease, transform 200ms ease;
+        }
+
+        .toast.is-visible {
+            opacity: 1;
+            transform: translateY(0);
         }
 
         /* ------------------------------------------------------------------
@@ -763,7 +906,9 @@
         }
 
         .ayah__label {
-            display: inline-block;
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
             margin-bottom: 6px;
             color: var(--muted);
             font-family: var(--font-ui);
@@ -771,6 +916,11 @@
             font-weight: 600;
             letter-spacing: 0.1em;
             text-transform: uppercase;
+        }
+
+        .ayah__label .flag {
+            width: 18px;
+            height: 12px;
         }
 
         .ayah__tafsir {
@@ -975,28 +1125,21 @@
                     </svg>
                     <span class="btn__label btn__label--always">سورة</span>
                 </button>
-                <button id="toggle-tafsir" class="btn is-active" type="button" aria-label="Hide Tafsir"
-                    aria-pressed="true" title="إظهار / إخفاء التفسير" disabled>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                        stroke-linejoin="round" aria-hidden="true">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <path d="M14 2v6h6"></path>
-                        <path d="M16 13H8M16 17H8"></path>
-                    </svg>
-                    <span class="btn__label">التفسير</span>
-                    <span class="sr-only">HIDE TAFSIR</span>
-                </button>
-                <button id="toggle-english" class="btn is-active" type="button" aria-label="Hide English"
-                    aria-pressed="true" title="إظهار / إخفاء الترجمة" disabled>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                        stroke-linejoin="round" aria-hidden="true">
-                        <circle cx="12" cy="12" r="9"></circle>
-                        <path d="M3 12h18"></path>
-                        <path d="M12 3c2.5 2.6 4 5.7 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.7-4-9s1.5-6.4 4-9z"></path>
-                    </svg>
-                    <span class="btn__label">English</span>
-                    <span class="sr-only">HIDE ENGLISH</span>
-                </button>
+                <div class="picker" id="source-picker">
+                    <button id="sources-toggle" class="btn" type="button" aria-label="اختر المصادر المعروضة"
+                        aria-expanded="false" aria-controls="sources-panel" title="اختر التفسير والترجمات" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M8 6h13M8 12h13M8 18h13"></path>
+                            <path d="M3 6h.01M3 12h.01M3 18h.01"></path>
+                        </svg>
+                        <span class="btn__label btn__label--always">المصادر</span>
+                        <span id="sources-count" class="picker__count" hidden></span>
+                    </button>
+                    <div id="sources-panel" class="picker__panel" hidden>
+                        <div id="sources-list" class="picker__list"></div>
+                    </div>
+                </div>
                 <button id="theme-toggle" class="btn" type="button" aria-label="Switch to light mode"
                     title="تفعيل الوضع النهاري" disabled>
                     <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -1052,7 +1195,7 @@
             <h1>
                 <span>القرآن الكريم</span>
             </h1>
-            <p class="hero-sub">١١٤ سورة<span>•</span>تفسير الجلالين<span>•</span>ترجمة إنجليزية</p>
+            <p class="hero-sub" id="hero-sub">١١٤ سورة</p>
         </header>
 
         <div id="search-results"></div>

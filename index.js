@@ -1,15 +1,17 @@
 
 /* ---------------------------------------------------------------------------
  * Quran text sources
- *   quran-uthmani.xml      - the Uthmani text that is displayed for reading
- *   quran-simple-clean.xml - diacritic free text used for searching
- *   en.sahih.xml           - English translation
- *   ar.jalalayn.xml        - Arabic tafsir
+ *   QuranText/Quran/quran-uthmani.xml      - the Uthmani text used for reading
+ *   QuranText/Quran/quran-simple-clean.xml - diacritic free text used by search
+ *   QuranText/catalog.json                 - index of the tafsir/translation
+ *                                            files that are available (built
+ *                                            by tools/download-tanzil-translations.ps1)
+ * The tafsir and translation files are fetched the first time they are picked,
+ * so the page does not download dozens of megabytes on start-up.
  * ------------------------------------------------------------------------ */
-const SOURCE_UTHMANI = 'https://voidwave.com/Quran/QuranText/Quran/quran-uthmani.xml';
-const SOURCE_CLEAN = 'https://voidwave.com/Quran/QuranText/Quran/quran-simple-clean.xml';
-const SOURCE_ENGLISH = 'https://voidwave.com/Quran/QuranText/English-Translation/en.sahih.xml';
-const SOURCE_TAFSIR = 'https://voidwave.com/Quran/QuranText/Arabic-Tafsir/ar.jalalayn.xml';
+const SOURCE_UTHMANI = 'QuranText/Quran/quran-uthmani.xml';
+const SOURCE_CLEAN = 'QuranText/Quran/quran-simple-clean.xml';
+const SOURCE_CATALOG = 'QuranText/catalog.json';
 
 /* Search results are rendered in pages so common words stay responsive.
  * A page is drawn in small chunks: the first chunk appears immediately, the
@@ -24,14 +26,51 @@ const RESULTS_EXCERPT_LENGTH = 300;
 /* Arabic-Indic digits, used for surah and ayah numbers. */
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 
+/* Used when QuranText/catalog.json cannot be read, so the app still works. */
+const FALLBACK_CATALOG = {
+    tafsirs: [{
+        id: 'ar.jalalayn',
+        code: 'ar',
+        lang: 'Arabic',
+        rtl: true,
+        flag: 'sa',
+        name: 'تفسير الجلالين',
+        translator: 'Jalal ad-Din al-Mahalli and Jalal ad-Din as-Suyuti',
+        path: 'QuranText/Arabic-Tafsir/ar.jalalayn.xml'
+    }],
+    translations: [{
+        id: 'en.sahih',
+        code: 'en',
+        lang: 'English',
+        rtl: false,
+        flag: 'gb',
+        name: 'Saheeh International',
+        translator: 'Saheeh International',
+        path: 'QuranText/English-Translation/en.sahih.xml'
+    }]
+};
+
+/* Parsed files that are not ticked are dropped again once the cache grows
+ * past this size; ticked files are always kept, so a reader can enable as
+ * many tafsirs and translations as they like. */
+const SOURCE_CACHE_LIMIT = 4;
+
+/* The files shown under every ayah. The reader ticks them in the picker and
+ * the choice is stored in localStorage. */
+const SOURCES_STORAGE_KEY = 'quran-sources';
+const LEGACY_STORAGE_KEYS = ['quran-tafsir', 'quran-translation'];
+const DEFAULT_SOURCES = ['ar.jalalayn', 'en.sahih'];
+
 var surasTashkeel;
 var surasClean;
-var surasEnglish;
-var surasTafsirJalalyn;
 var SurahText;
+var catalog = FALLBACK_CATALOG;
 
-let showTafsir = true; // Flag to track the visibility of Tafsir
-let showEnglish = true; // Flag to track the visibility of English
+var enabledSources = [];   // ids in the order the reader ticked them
+var sourceCache = {};      // source id -> parsed <sura> elements
+var sourceCacheOrder = []; // the ids above in the order they were added
+var pickerElements = { toggle: null, panel: null, count: null, list: null };
+var pickerIsOpen = false;
 
 let selectedSurah = null; // Variable to track selected Surah
 let currentMatches = [];  // Matches of the last search query
@@ -39,14 +78,18 @@ let renderedMatches = 0;  // Number of matches that are already on screen
 let resultsTarget = 0;    // Number of matches the loaded pages contain
 let renderHandle = null;  // Pending idle render of the next chunk
 let searchTimer = null;   // Debounce timer for the search field
+let toastTimer = null;    // Hides the status message again
 
 Promise.all([
-    loadXml(SOURCE_UTHMANI).then(data => surasTashkeel = data),
-    loadXml(SOURCE_CLEAN).then(data => surasClean = data),
-    loadXml(SOURCE_ENGLISH).then(data => surasEnglish = data),
-    loadXml(SOURCE_TAFSIR).then(data => surasTafsirJalalyn = data)
-]).then(() => {
-    console.log("All XML files loaded successfully!");
+    loadXml(SOURCE_UTHMANI).then(function (data) { surasTashkeel = data; }),
+    loadXml(SOURCE_CLEAN).then(function (data) { surasClean = data; }),
+    loadCatalog()
+]).then(function () {
+    setupSourcePicker();
+    restoreSources();
+    return loadEnabledSources();
+}).then(function () {
+    console.log('Quran text loaded. Sources: ' + (enabledSources.join(', ') || 'none'));
     initializePage();
     setupSearchBar(); // Call the function that initializes the page
 }).catch(error => {
@@ -60,12 +103,364 @@ Promise.all([
 
 function loadXml(path) {
     return fetch(path)
-        .then(response => response.text())
-        .then(xml => {
-            let parser = new DOMParser();
-            let xmlDOM = parser.parseFromString(xml, 'application/xml');
+        .then(function (response) {
+            if (!response.ok) {
+                throw new Error('Could not fetch ' + path + ' (HTTP ' + response.status + ')');
+            }
+            return response.text();
+        })
+        .then(function (xml) {
+            const parser = new DOMParser();
+            const xmlDOM = parser.parseFromString(xml, 'application/xml');
+            if (xmlDOM.querySelector('parsererror')) {
+                throw new Error('Invalid XML in ' + path);
+            }
             return xmlDOM.querySelectorAll('sura'); // Return the parsed sura elements
         });
+}
+
+/* Reads the index of the tafsir and translation files that are on the server. */
+function loadCatalog() {
+    return fetch(SOURCE_CATALOG)
+        .then(function (response) {
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+            }
+            return response.json();
+        })
+        .then(function (data) {
+            catalog = {
+                tafsirs: Array.isArray(data.tafsirs) ? data.tafsirs : [],
+                translations: Array.isArray(data.translations) ? data.translations : []
+            };
+        })
+        .catch(function (error) {
+            console.warn('Could not read ' + SOURCE_CATALOG + ', using the built-in list.', error);
+            catalog = FALLBACK_CATALOG;
+        });
+}
+
+/* ---------------------------------------------------------------------------
+ * Source picker (check boxes with flags)
+ * ------------------------------------------------------------------------ */
+
+function setupSourcePicker() {
+    pickerElements.toggle = document.getElementById('sources-toggle');
+    pickerElements.panel = document.getElementById('sources-panel');
+    pickerElements.count = document.getElementById('sources-count');
+    pickerElements.list = document.getElementById('sources-list');
+
+    pickerElements.list.innerHTML =
+        sourceGroupHTML('التفاسير', catalog.tafsirs)
+        + sourceGroupHTML('الترجمات', catalog.translations);
+
+    pickerElements.toggle.addEventListener('click', function (event) {
+        event.stopPropagation();
+        setPickerOpen(!pickerIsOpen);
+    });
+    pickerElements.list.addEventListener('change', function (event) {
+        const checkbox = event.target.closest('input[data-source]');
+        if (checkbox) {
+            setSourceEnabled(checkbox.dataset.source, checkbox.checked, checkbox);
+        }
+    });
+    pickerElements.list.addEventListener('click', function (event) {
+        event.stopPropagation(); // Clicks inside the panel keep it open
+    });
+    document.addEventListener('click', function () {
+        setPickerOpen(false);
+    });
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+            setPickerOpen(false);
+        }
+    });
+    window.addEventListener('resize', function () {
+        if (pickerIsOpen) {
+            positionPickerPanel();
+        }
+    });
+}
+
+/* One checkbox per catalog entry: flag, name and translator. */
+function sourceGroupHTML(title, entries) {
+    if (entries.length === 0) {
+        return '';
+    }
+
+    const rows = entries.map(function (entry) {
+        return '<label class="source-option" title="' + htmlEscape(entry.translator) + '">'
+            + '<input type="checkbox" data-source="' + htmlEscape(entry.id) + '">'
+            + flagHTML(entry)
+            + '<span class="source-option__text">'
+            + '<span class="source-option__name">' + htmlEscape(entry.name) + '</span>'
+            + '<span class="source-option__meta">' + htmlEscape(entry.translator) + '</span>'
+            + '</span>'
+            + '</label>';
+    }).join('');
+
+    return '<p class="picker__group">' + title + '</p>' + rows;
+}
+
+/* Country flag of the language a file belongs to. */
+function flagHTML(entry) {
+    if (!entry.flag) {
+        return '';
+    }
+    return '<img class="flag" src="flags/' + htmlEscape(entry.flag) + '.png" alt=""'
+        + ' width="22" height="15" loading="lazy">';
+}
+
+function setPickerOpen(open) {
+    pickerIsOpen = open;
+    pickerElements.panel.hidden = !open;
+    pickerElements.toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+        positionPickerPanel();
+    }
+}
+
+/* Keeps the panel below its button and inside the viewport, also on phones. */
+function positionPickerPanel() {
+    const panel = pickerElements.panel;
+    const picker = panel.parentElement;
+    const button = pickerElements.toggle.getBoundingClientRect();
+    const width = Math.min(360, window.innerWidth - 24);
+
+    let viewportLeft = button.left + button.width / 2 - width / 2;
+    viewportLeft = Math.max(12, Math.min(viewportLeft, window.innerWidth - width - 12));
+
+    panel.style.width = width + 'px';
+    panel.style.left = Math.round(viewportLeft - picker.getBoundingClientRect().left) + 'px';
+}
+
+function checkboxFor(id) {
+    return pickerElements.list.querySelector('input[data-source="' + id + '"]');
+}
+
+/* Ticks the boxes of the files the reader picked earlier. */
+function restoreSources() {
+    let stored = null;
+    try {
+        stored = JSON.parse(localStorage.getItem(SOURCES_STORAGE_KEY));
+    } catch (error) {
+        stored = null;
+    }
+
+    if (!Array.isArray(stored)) {
+        stored = legacySources();
+    }
+
+    enabledSources = stored.filter(function (id) {
+        return findCatalogEntry(id) !== null;
+    });
+
+    enabledSources.forEach(function (id) {
+        const checkbox = checkboxFor(id);
+        if (checkbox) {
+            checkbox.checked = true;
+        }
+    });
+}
+
+/* The two single selects this picker replaced, kept for a smooth upgrade. */
+function legacySources() {
+    const chosen = [];
+    let hadChoice = false;
+
+    LEGACY_STORAGE_KEYS.forEach(function (key) {
+        let value = null;
+        try {
+            value = localStorage.getItem(key);
+        } catch (error) {
+            value = null;
+        }
+        if (value !== null) {
+            hadChoice = true;
+            if (value) {
+                chosen.push(value);
+            }
+        }
+    });
+
+    return hadChoice ? chosen : DEFAULT_SOURCES.slice();
+}
+
+function saveSources() {
+    try {
+        localStorage.setItem(SOURCES_STORAGE_KEY, JSON.stringify(enabledSources));
+        LEGACY_STORAGE_KEYS.forEach(function (key) {
+            localStorage.removeItem(key);
+        });
+    } catch (error) {
+        // Ignore storage errors (private mode, storage disabled, ...)
+    }
+}
+
+/* Fetches the files of the sources that are ticked on start-up. */
+function loadEnabledSources() {
+    return Promise.all(enabledSources.map(function (id) {
+        return ensureSourceData(id).catch(function (error) {
+            console.warn('Could not load ' + id + '.', error);
+            enabledSources = enabledSources.filter(function (other) {
+                return other !== id;
+            });
+            const checkbox = checkboxFor(id);
+            if (checkbox) {
+                checkbox.checked = false;
+            }
+        });
+    })).then(function () {
+        saveSources();
+        updatePickerSummary();
+    });
+}
+
+/* Ticking a box loads the file, unticking removes its blocks again. */
+function setSourceEnabled(id, enabled, checkbox) {
+    if (enabled) {
+        if (enabledSources.indexOf(id) === -1) {
+            enabledSources.push(id);
+        }
+
+        const option = checkbox.closest('.source-option');
+        checkbox.disabled = true;
+        option.classList.add('is-loading');
+
+        ensureSourceData(id)
+            .catch(function (error) {
+                console.error('Could not load ' + id, error);
+                enabledSources = enabledSources.filter(function (other) {
+                    return other !== id;
+                });
+                checkbox.checked = false;
+                showToast('تعذّر تحميل الملف المطلوب.');
+            })
+            .then(function () {
+                checkbox.disabled = false;
+                option.classList.remove('is-loading');
+                saveSources();
+                updatePickerSummary();
+                afterSourceChange();
+            });
+        return;
+    }
+
+    enabledSources = enabledSources.filter(function (other) {
+        return other !== id;
+    });
+    saveSources();
+    updatePickerSummary();
+    afterSourceChange();
+}
+
+function updatePickerSummary() {
+    const count = enabledSources.length;
+    pickerElements.count.textContent = count ? toArabicDigits(count) : '';
+    pickerElements.count.hidden = count === 0;
+    pickerElements.toggle.classList.toggle('is-active', count > 0);
+    pickerElements.toggle.setAttribute('aria-label', count
+        ? 'المصادر المعروضة: ' + count
+        : 'اختر المصادر المعروضة');
+}
+
+function findCatalogEntry(id) {
+    return catalog.tafsirs.concat(catalog.translations).find(function (entry) {
+        return entry.id === id;
+    }) || null;
+}
+
+/* Fetches and parses a tafsir/translation file the first time it is used. */
+function ensureSourceData(id) {
+    if (sourceCache[id]) {
+        return Promise.resolve(sourceCache[id]);
+    }
+
+    const entry = findCatalogEntry(id);
+    if (!entry) {
+        return Promise.reject(new Error('Unknown source: ' + id));
+    }
+
+    return loadXml(entry.path).then(function (data) {
+        sourceCache[id] = data;
+        sourceCacheOrder.push(id);
+        trimSourceCache();
+        return data;
+    });
+}
+
+/* Drops the oldest files that are not ticked; everything that is on screen
+ * stays in memory, however many sources are selected. */
+function trimSourceCache() {
+    const keep = Math.max(SOURCE_CACHE_LIMIT, enabledSources.length);
+    let index = 0;
+
+    while (sourceCacheOrder.length > keep && index < sourceCacheOrder.length) {
+        const cachedId = sourceCacheOrder[index];
+        if (enabledSources.indexOf(cachedId) === -1) {
+            delete sourceCache[cachedId];
+            sourceCacheOrder.splice(index, 1);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+/* Re-draws everything that shows a tafsir or a translation. */
+function afterSourceChange() {
+    updateHeroSub();
+    if (selectedSurah !== null) {
+        renderSurah(selectedSurah);
+    }
+    refreshSearchResults();
+}
+
+function updateHeroSub() {
+    const hero = document.getElementById('hero-sub');
+    if (!hero) {
+        return;
+    }
+
+    const parts = ['١١٤ سورة'];
+    if (enabledSources.length === 1) {
+        const entry = findCatalogEntry(enabledSources[0]);
+        if (entry) {
+            parts.push(htmlEscape(entry.name));
+        }
+    } else if (enabledSources.length === 2) {
+        parts.push('مصدران');
+    } else if (enabledSources.length > 2) {
+        parts.push(toArabicDigits(enabledSources.length) + ' مصادر');
+    }
+    hero.innerHTML = parts.join('<span>•</span>');
+}
+
+function htmlEscape(text) {
+    return String(text === null || text === undefined ? '' : text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/* Small message at the bottom of the screen. */
+function showToast(message) {
+    let toast = document.getElementById('toast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'toast';
+        toast.className = 'toast';
+        toast.setAttribute('role', 'status');
+        document.body.appendChild(toast);
+    }
+
+    toast.textContent = message;
+    toast.classList.add('is-visible');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+        toast.classList.remove('is-visible');
+    }, 4000);
 }
 
 function initializePage() {
@@ -80,8 +475,6 @@ function initializePage() {
     var themeButton = document.getElementById("theme-toggle");
     var toTop = document.getElementById('to-top');
     var showNav = document.getElementById('show-nav');
-    var toggleTafsirButton = document.getElementById("toggle-tafsir"); // Get the toggle button
-    var toggleEnglishButton = document.getElementById("toggle-english"); // Get the toggle button
 
     // The text is available now, so the toolbar can be used.
     document.querySelectorAll('.appbar [disabled]').forEach(function (element) {
@@ -89,31 +482,7 @@ function initializePage() {
     });
     SurahText.innerHTML = emptyStateHTML();
     applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
-    syncToggleState(toggleTafsirButton, showTafsir, "HIDE TAFSIR", "SHOW TAFSIR");
-    syncToggleState(toggleEnglishButton, showEnglish, "HIDE ENGLISH", "SHOW ENGLISH");
-
-    toggleTafsirButton.addEventListener('click', function () {
-        // Toggle the visibility flags
-        showTafsir = !showTafsir;
-        syncToggleState(toggleTafsirButton, showTafsir, "HIDE TAFSIR", "SHOW TAFSIR");
-
-        // Re-render the content based on the new visibility state
-        if (selectedSurah !== null) {
-            ViewSurah(selectedSurah, false);
-        }
-        refreshSearchResults();
-    });
-    toggleEnglishButton.addEventListener('click', function () {
-        // Toggle the visibility flags
-        showEnglish = !showEnglish;
-        syncToggleState(toggleEnglishButton, showEnglish, "HIDE ENGLISH", "SHOW ENGLISH");
-
-        // Re-render the content based on the new visibility state
-        if (selectedSurah !== null) {
-            ViewSurah(selectedSurah, false);
-        }
-        refreshSearchResults();
-    });
+    updateHeroSub();
 
     themeButton.addEventListener('click', function () {
         var next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
@@ -262,8 +631,8 @@ function runSearch(scrollToResults) {
 
     const query = normalizeArabic(searchBar.value.trim());
 
-    if (query.length < 2) { // Avoid overly short searches
-        clearSearch();
+    if (query.length < 3) { // At least three letters before a search starts
+        clearResults();
         return;
     }
 
@@ -397,14 +766,20 @@ function excerpt(text) {
 
 /* Clears the search field and everything that was rendered for it. */
 function clearSearch() {
-    const resultsContainer = document.getElementById('search-results');
     const searchBar = document.getElementById('search-bar');
+
+    if (searchBar) {
+        searchBar.value = '';
+    }
+    clearResults();
+}
+
+/* Empties the result list without touching what is typed in the field. */
+function clearResults() {
+    const resultsContainer = document.getElementById('search-results');
 
     if (resultsContainer) {
         resultsContainer.innerHTML = '';
-    }
-    if (searchBar) {
-        searchBar.value = '';
     }
     currentMatches = [];
     renderedMatches = 0;
@@ -542,38 +917,49 @@ function surahHeadHTML(surahIndex) {
         + '</header>';
 }
 
+/* One block per ticked source, in the order the reader ticked them. */
+function sourceBlocksHTML(surahIndex, ayahIndex, clamp) {
+    return enabledSources.map(function (id) {
+        return sourceBlockHTML(id, surahIndex, ayahIndex, clamp);
+    }).join('');
+}
+
+function sourceBlockHTML(id, surahIndex, ayahIndex, clamp) {
+    const entry = findCatalogEntry(id);
+    const data = sourceCache[id];
+    if (!entry || !data) {
+        return '';
+    }
+
+    const sura = data[surahIndex];
+    const ayah = sura ? sura.children[ayahIndex] : null;
+    const text = ayah ? ayah.getAttribute('text') : '';
+    if (!text) {
+        return '';
+    }
+
+    const isRtl = entry.rtl === true;
+    return '<div class="ayah__block" dir="' + (isRtl ? 'rtl' : 'ltr') + '">'
+        + '<span class="ayah__label">' + flagHTML(entry) + htmlEscape(entry.name) + '</span>'
+        + '<p class="' + (isRtl ? 'ayah__tafsir' : 'ayah__english')
+        + (clamp ? ' clamp-text' : '') + '">'
+        + (clamp ? excerpt(text) : text)
+        + '</p>'
+        + '</div>';
+}
+
 /* One ayah card: number, Uthmani text, tafsir and translation. */
 function ayahCardHTML(surahIndex, ayahIndex) {
-    let html = '<article class="ayah" id="ayah-' + surahIndex + '-' + ayahIndex + '">'
+    return '<article class="ayah" id="ayah-' + surahIndex + '-' + ayahIndex + '">'
         + '<div class="ayah__head">'
         + '<span class="ayah__num">' + toArabicDigits(ayahIndex + 1) + '</span>'
         + '<span class="ayah__rule" aria-hidden="true"></span>'
         + '</div>'
         + '<p class="ayah__text quran-text" lang="ar">'
         + surasTashkeel[surahIndex].children[ayahIndex].getAttribute('text')
-        + '</p>';
-
-    if (showTafsir) {
-        const tafsir = surasTafsirJalalyn[surahIndex].children[ayahIndex].getAttribute('text');
-        if (tafsir) {
-            html += '<div class="ayah__block">'
-                + '<span class="ayah__label">تفسير الجلالين</span>'
-                + '<p class="ayah__tafsir">' + tafsir + '</p>'
-                + '</div>';
-        }
-    }
-
-    if (showEnglish) {
-        const english = surasEnglish[surahIndex].children[ayahIndex].getAttribute('text');
-        if (english) {
-            html += '<div class="ayah__block" dir="ltr">'
-                + '<span class="ayah__label">English</span>'
-                + '<p class="ayah__english">' + english + '</p>'
-                + '</div>';
-        }
-    }
-
-    return html + '</article>';
+        + '</p>'
+        + sourceBlocksHTML(surahIndex, ayahIndex, false)
+        + '</article>';
 }
 
 /* One search result card (the matched ayah, with the query highlighted). */
@@ -597,46 +983,14 @@ function searchResultHTML(match) {
         + toArabicDigits(surahIndex + 1) + ':' + toArabicDigits(ayahIndex + 1)
         + '</span>'
         + '</div>'
-        + '<p class="quran-text" lang="ar">' + highlighted + '</p>';
-
-    if (showTafsir) {
-        const tafsir = surasTafsirJalalyn[surahIndex].children[ayahIndex].getAttribute('text');
-        if (tafsir) {
-            html += '<div class="ayah__block">'
-                + '<span class="ayah__label">تفسير الجلالين</span>'
-                + '<p class="ayah__tafsir clamp-text">' + excerpt(tafsir) + '</p>'
-                + '</div>';
-        }
-    }
-
-    if (showEnglish) {
-        const english = surasEnglish[surahIndex].children[ayahIndex].getAttribute('text');
-        if (english) {
-            html += '<div class="ayah__block" dir="ltr">'
-                + '<span class="ayah__label">English</span>'
-                + '<p class="ayah__english clamp-text">' + excerpt(english) + '</p>'
-                + '</div>';
-        }
-    }
+        + '<p class="quran-text" lang="ar">' + highlighted + '</p>'
+        + sourceBlocksHTML(surahIndex, ayahIndex, true);
 
     return html + '</div>';
 }
 
 function emptyStateHTML() {
     return '<p class="empty">اختر سورة من قائمة السور، أو ابحث في القرآن الكريم من الشريط في الأعلى.</p>';
-}
-
-/* Keeps a reading toggle (tafsir / English) in sync with its state. */
-function syncToggleState(button, isActive, activeLabel, inactiveLabel) {
-    const label = isActive ? activeLabel : inactiveLabel;
-    const srOnly = button.querySelector('.sr-only');
-
-    if (srOnly) {
-        srOnly.innerText = label;
-    }
-    button.setAttribute('aria-label', label);
-    button.setAttribute('aria-pressed', isActive);
-    button.classList.toggle('is-active', isActive);
 }
 
 function applyTheme(theme) {
