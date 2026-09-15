@@ -58,8 +58,8 @@ Then open http://localhost:8123/.
 ```
 index.html                          # the app (UI, styles, theme bootstrap)
 index.js                            # app logic: text, sources, search, audio
-index2.html                         # standalone Mushaf page view (test)
-index2.js                           # its logic: glyph layer, layout, copy
+index2.html                         # Mushaf view (all 604 pages in one endless scroll)
+index2.js                           # its logic: glyph layer, page layout, copy, lazy pages
 QuranText/
   Quran/                            # Tanzil Quran text XML files
   Arabic-Tafsir/                    # Arabic tafsirs
@@ -72,7 +72,7 @@ QuranAudio/
 flags/                              # flag images shown next to each source
 fonts/                              # Uthmanic Hafs font
 fonts/mushaf/                       # QPC page fonts + surah name cartouches
-QuranText/MushafPages/              # per-page word data (words, glyphs, printed lines)
+QuranText/MushafPages/              # per-page word data + index.json (114 chapters, 604 pages)
 tools/
   serve.js                          # local dev server
   download-tanzil-translations.ps1  # download/refresh tafsirs & translations
@@ -89,22 +89,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\download-tanzil-tran
 # rebuild the reciters list from the QuranAudio folders
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-reciter-list.ps1
 
-# build the Mushaf page data and page fonts of a surah (default: 18)
+# build the Mushaf page data and page fonts (whole Quran, or one chapter)
+node tools/build-mushaf-pages.mjs all
 node tools/build-mushaf-pages.mjs 18
 ```
 
 ---
 
-## 📖 Mushaf page view (test)
+## 📖 Mushaf page view
 
-`index2.html` is a standalone test page that draws the Quran the way the printed Mushaf does, using the same technique as quran.com:
+`index2.html` draws the Quran the way the printed Mushaf does — all 604 pages in one endless scroll — with the same technique quran.com uses:
 
-- Every **word** is one glyph of a per-page font (`fonts/mushaf/p<page>.woff2`), so each word is a single vector shape in its exact printed form, while the page stays light enough to serve like plain text.
-- The words are grouped per printed line and spread over the full page width, so the text breaks exactly where the printed page breaks (15 lines a page, two of which a surah banner takes).
-- The real ʿUthmānī word is kept behind every glyph: selection stops at word boundaries, and the copy handler replaces the glyphs with the real words — copying gives you `ٱلْحَمْدُ لِلَّهِ ٱلَّذِىٓ أَنزَلَ`, never code points.
-- Word meanings, transliterations and word-by-word recitation are one click away.
+- Every **word** is one glyph of a per-page font (`fonts/mushaf/p<page>.woff2`), so a word is a single vector shape in its exact printed form while the page still behaves like text.
+- The words of a printed line are spread over the full page width, so the text breaks exactly where the printed page breaks (15 lines a page, two of which a surah banner takes). The glyph size follows the sheet proportion of the print, so every page of the Quran is laid out identically.
+- The real ʿUthmānī word is kept behind every glyph: selection stops at word boundaries, and the copy handler puts the real words on the clipboard — copying gives you `ٱلْحَمْدُ لِلَّهِ ٱلَّذِىٓ أَنزَلَ`, never code points.
+- Scrolling is endless in both directions, on desktop and on mobile: pages are drawn only while they are near the viewport, so carrying the whole Quran on one scroll costs no extra memory.
+- The view switch (**القارئ / المصحف**) moves between this page and the app while keeping your place: the Mushaf opens on the page where a surah starts (`index2.html#s18`), the reader opens that surah (`index.html?surah=18`), and the reader also keeps the surah in its address bar so a reload comes back to it.
+- Dark and light themes cover the pages themselves: dark paper with light ink in the dark theme (a word is a vector outline, so only the paper and the ink change) and cream paper with dark ink in the light theme; switching the theme also recolours the pages already on screen, with no redraw.
+- The app bar keeps only what reading needs — the surah picker, the page pager, the listen button and the القارئ/المصحف switch — and tucks the reciter picker, the random surah and the theme into a tools menu on small screens (on wide ones they stay inline). It also slides away by itself a couple of seconds after you stop scrolling, and returns on the next scroll, touch or hover.
+- Pressing **التلاوة** recites from the verse you have selected (or from the word whose card is open), and from the first verse of the page when nothing is selected. Every surah banner carries its own small play button that recites that surah from its first ayah. Both use the same `QuranAudio/` files and reciters as the app: the recited verse is highlighted, the view follows the recitation from page to page, each surah is opened with its basmala (surah 9 has none) and a missing file is skipped with a message, exactly like `index.js`.
+- A word's meaning, transliteration and recitation are one click away.
 
-The data (words, glyph code points, printed line numbers, real text, word audio) is built once per surah into `QuranText/MushafPages/` by `tools/build-mushaf-pages.mjs`, together with the page fonts. Those fonts belong to the King Fahd Complex (served through quran.com) and are downloaded here for local development — check the [QUL](https://qul.tarteel.ai) licence before publishing.
+`node tools/build-mushaf-pages.mjs all` fetches every printed page — its words, glyph code points, printed line numbers, real text and word audio — into `QuranText/MushafPages/` (around 93 MB of page fonts, a few minutes). Pass a chapter number instead to build just that chapter while developing. The fonts belong to the King Fahd Complex (served through quran.com) and are downloaded here for local development — check the [QUL](https://qul.tarteel.ai) licence before publishing.
 
 ---
 
@@ -166,8 +172,8 @@ node tools/serve.js 3000   # منفذ مخصص
 ```
 index.html                          # التطبيق (الواجهة والأنماط وتفعيل الثيم)
 index.js                            # منطق التطبيق: النص والمصادر والبحث والصوت
-index2.html                         # عرض صفحات المصحف (صفحة تجريبية مستقلة)
-index2.js                           # منطقها: طبقة الرسوم والتوزيع والنسخ
+index2.html                         # عرض المصحف (٦٠٤ صفحات في تمرير واحد)
+index2.js                           # منطقها: طبقة الرسوم والتوزيع والنسخ والتمرير اللانهائي
 QuranText/
   Quran/                            # ملفات نص القرآن من Tanzil
   Arabic-Tafsir/                    # التفاسير العربية
@@ -188,16 +194,21 @@ tools/
   build-mushaf-pages.mjs            # بناء بيانات صفحات المصحف وخطوطها
 ```
 
-## 📖 عرض صفحات المصحف (تجريبي)
+## 📖 عرض المصحف
 
-`index2.html` صفحة مستقلة ترسم النص كما في المصحف المطبوع، بالطريقة نفسها التي يستخدمها quran.com:
+`index2.html` يرسم القرآن كما في المصحف المطبوع — الصفحات الـ604 كلها في تمرير واحد لا ينتهي — بالطريقة نفسها التي يستخدمها quran.com:
 
-- كل **كلمة** رسم متجهي واحد من خط الصفحة (`fonts/mushaf/p<page>.woff2`)، فتبقى الصفحة خفيفة وتُقدَّم كالنص العادي.
-- تُجمَّع الكلمات في أسطر الصفحة المطبوعة وتُوزَّع على عرضها كاملًا، فينكسر النص حيث ينكسر في المطبوع (١٥ سطرًا للصفحة، يشغل سطران منها ترويسة السورة).
+- كل **كلمة** رسم متجهي واحد من خط الصفحة (`fonts/mushaf/p<page>.woff2`)، فيكون الرسم في شكله المطبوع تمامًا وتبقى الصفحة خفيفة كالنص العادي.
+- تُوزَّع كلمات كل سطر مطبوع على عرض الصفحة كاملًا، فينكسر النص حيث ينكسر في المطبوع (١٥ سطرًا للصفحة، يشغل سطران منها ترويسة السورة)، وحجم الرسم يتبع نسبة الصفحة في المطبوع فتتساوى صفحات القرآن في التنسيق.
 - النص العثماني الحقيقي محفوظ خلف كل رسمة: يقف التحديد عند حدود الكلمة، وعند النسخ تُستبدل الرسوم بالكلمات الحقيقية — فتحصل على `ٱلْحَمْدُ لِلَّهِ ٱلَّذِىٓ أَنزَلَ` لا على رموز الخط.
-- معنى الكلمة ونقلها الصوتي وتلاوتها على مستوى الكلمة بضغطة واحدة.
+- التمرير متصل في الاتجاهين، على الحاسوب والجوال: لا تُرسم الصفحة إلا وهي قريبة من نافذة العرض، فحمل المصحف كاملًا في تمرير واحد لا يستهلك ذاكرة إضافية.
+- مفتاح التنقل (**القارئ / المصحف**) ينقلك بين هذه الصفحة و`index.html` مع حفظ موضعك: يفتح المصحف على أول صفحة للسورة (`index2.html#s18`)، ويفتح القارئ تلك السورة (`index.html?surah=18`)، ويحفظ القارئ السورة في شريط العنوان فيعود إليها بعد إعادة التحميل.
+- الوضع الليلي والنهاري يشمل الصفحات نفسها: ورق داكن بحبر فاتح في الوضع الليلي (الكلمة رسم متجهي، فلا يتغير إلا الورق والحبر)، وورق كريمي بحبر داكن في الوضع النهاري؛ وتبديل الوضع يُعيد تلوين الصفحات المعروضة فورًا دون إعادة رسم.
+- شريط الأدوات لا يحمل إلا ما تحتاجه القراءة — قائمة السور، والسابق والتالي، وزر التلاوة، ومفتاح القارئ/المصحف — ويجمع اختيار القارئ والسورة العشوائية والوضع الليلي في قائمة أدوات على الشاشات الصغيرة (وتبقى ظاهرة على الشاشات الواسعة). كما يختفي الشريط وحده بعد ثوانٍ من توقّف التمرير، ويعود مع أول تمرير أو لمس أو مرور بالمؤشر.
+- زر **التلاوة** يقرأ من الآية التي حدّدتها (أو من الكلمة المفتوحة)، ومن أول آية في الصفحة إن لم يكن هناك تحديد. وفي ترويسة كل سورة زر تشغيل صغير يقرأ تلك السورة من أولها. وكلاهما بملفات `QuranAudio/` وقرّائها نفسهم: تُبرز الآية الجارية، ويتابع العرض التلاوة من صفحة إلى صفحة، وتُفتتح كل سورة ببسملتها (ولا بسملة لسورة التوبة)، ويُتخطّى الملف المفقود مع تنبيه — تمامًا كسلوك `index.js`.
+- معنى الكلمة ونقلها الصوتي وتلاوتها بضغطة واحدة.
 
-تُبنى البيانات (الكلمات ورموز الخطوط وأرقام الأسطر والنص الحقيقي والصوت) مرة واحدة لكل سورة عبر `tools/build-mushaf-pages.mjs` وحفظها في `QuranText/MushafPages/` مع خطوط الصفحات. هذه الخطوط ملك لمجمّع الملك فهد (تُقدَّم عبر quran.com)، ونُزِّلت هنا للتجربة المحلية — فراجع رخصة [QUL](https://qul.tarteel.ai) قبل النشر.
+يبني الأمر `node tools/build-mushaf-pages.mjs all` كل الصفحات المطبوعة — كلماتها ورموز خطوطها وأرقام أسطرها ونصها الحقيقي وصوتها — في `QuranText/MushafPages/` (نحو ٩٣ ميغابايت من خطوط الصفحات، في بضع دقائق). ويمكن تمرير رقم سورة لبناء سورة واحدة أثناء التطوير. هذه الخطوط ملك لمجمّع الملك فهد (تُقدَّم عبر quran.com)، ونُزِّلت هنا للتجربة المحلية — فراجع رخصة [QUL](https://qul.tarteel.ai) قبل النشر.
 
 ## 🤲 دعاء
 

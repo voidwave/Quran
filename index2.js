@@ -24,7 +24,9 @@
 const PAGE_DIR = 'QuranText/MushafPages/';
 const MANIFEST_URL = PAGE_DIR + 'index.json';
 const WORD_AUDIO_BASE = 'https://verses.quran.com/';   // word-by-word recitation
+const RECITERS_URL = 'QuranAudio/reciters.json';       // the ayah audio folders
 const THEME_KEY = 'quran-theme';
+const RECITER_KEY = 'quran-reciter';
 
 /* Line pitch of the printed page: quran.com lays a 43.72px glyph on a 76.19px
  * line, i.e. 1.743. The page scales with this factor. */
@@ -32,6 +34,12 @@ const LINE_RATIO = 1.743;
 
 /* A surah banner takes two of the 15 printed lines. */
 const BANNER_LINES = 2;
+
+/* The printed sheet is two thirds as wide as it is tall and holds 15 lines, so
+ * the page width fixes the line pitch — and with it the glyph size — exactly as
+ * in the print (quran.com: 761.9px wide page, 43.7px glyphs). */
+const PAGE_ASPECT = 2 / 3;
+const PRINTED_LINES = 15;
 
 /* Pages are drawn when they come this close to the viewport, and dropped again
  * once they are that far away from it. */
@@ -41,12 +49,22 @@ const KEEP_MARGIN = '4000px 0px';
 /* Parsed pages kept in memory. */
 const PAGE_CACHE = 24;
 
+/* A slot is a little taller than its page: rounding in the glyph advances must
+ * never push a page over its slot, because the offsets below it are cached. */
+const SLOT_MARGIN = 6;
+
+/* A short breath between two files of the recitation. */
+const AYAH_GAP_MS = 250;
+
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const toArabicDigits = value => String(value).replace(/\d/g, digit => ARABIC_DIGITS[Number(digit)]);
 
 const state = {
     manifest: null,
     chapters: [],
+    chapterById: new Map(),  // chapter number -> { versesCount, firstPage, ... }
+    reciters: [],            // the recitation folders of QuranAudio/
+    reciterId: '',
     pages: [],               // page numbers, ascending
     pageInfo: new Map(),     // page number -> { slots, font, fontBytes }
     slots: [],               // the slot element of every page
@@ -73,6 +91,12 @@ const el = {
     surahList: document.getElementById('surah-list'),
     random: document.getElementById('random-button'),
     theme: document.getElementById('theme-toggle'),
+    toolsToggle: document.getElementById('tools-toggle'),
+    toolsPanel: document.getElementById('appbar-tools'),
+    listenToggle: document.getElementById('listen-toggle'),
+    reciterPicker: document.getElementById('reciter-picker'),
+    reciterSelect: document.getElementById('reciter-select'),
+    readerLink: document.getElementById('reader-link'),
     popover: document.getElementById('popover'),
     toast: document.getElementById('toast')
 };
@@ -109,20 +133,24 @@ async function getJson(url) {
     return response.json();
 }
 
-/* Loads a font through the FontFace API so it is ready before measuring the
- * lines (measuring with a fallback font would size the page wrongly). */
-async function ensureFont(family, url) {
-    if (state.fonts.has(family)) return true;
-    try {
-        const face = new FontFace(family, 'url("' + url + '")');
-        await face.load();
-        document.fonts.add(face);
-        state.fonts.add(family);
-        return true;
-    } catch (error) {
-        console.warn('Font failed to load:', family, error);
-        return false;
+/* Loads a font through the FontFace API so it is ready before the lines are
+ * measured (measuring with a fallback font would size the page wrongly). The
+ * promise is cached, so a page font is only ever fetched once. */
+function ensureFont(family, url) {
+    if (!state.fonts.has(family)) {
+        state.fonts.set(family, (async () => {
+            try {
+                const face = new FontFace(family, 'url("' + url + '")');
+                await face.load();
+                document.fonts.add(face);
+                return true;
+            } catch (error) {
+                console.warn('Font failed to load:', family, error);
+                return false;
+            }
+        })());
     }
+    return state.fonts.get(family);
 }
 
 /* ---------------------------------------------------------------------------
@@ -130,15 +158,38 @@ async function ensureFont(family, url) {
  * ------------------------------------------------------------------------ */
 function surahBanner(chapter) {
     const banner = element('div', 'banner');
+    const head = element('div', 'banner__head');
+
     const icon = element('span', 'chapter-icon');
     icon.setAttribute('data-chapter-icon', String(chapter).padStart(3, '0'));
     icon.setAttribute('aria-hidden', 'true');
-    banner.appendChild(icon);
+    head.appendChild(icon);
+    head.appendChild(surahPlayButton(chapter));
+    banner.appendChild(head);
+
     /* Surah 9 has no basmala; in surah 1 the basmala is verse 1 itself. */
     if (chapter !== 9 && chapter !== 1) {
         banner.appendChild(element('span', 'banner__basmala', 'بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ'));
     }
     return banner;
+}
+
+/* The button beside the surah name: recites that surah from its first ayah. */
+function surahPlayButton(chapter) {
+    const button = element('button', 'banner__play');
+    button.type = 'button';
+    button.dataset.chapter = chapter;
+    button.title = 'تلاوة السورة من أولها';
+    button.setAttribute('aria-label', button.title);
+    button.innerHTML = '<svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+        + '<path d="M8 5v14l11-7z"></path></svg>'
+        + '<svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+        + '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"></path></svg>';
+    button.addEventListener('click', event => {
+        event.stopPropagation();
+        playSurah(chapter);
+    });
+    return button;
 }
 
 function wordElement(word, words) {
@@ -216,6 +267,9 @@ function openSlot(slot) {
             const card = buildCard(data, fontOk);
             slot.appendChild(card);
             state.open.set(page, { slot, card, words: card._words });
+            /* A page drawn while it is being recited shows the highlight too. */
+            if (recitation.key) markPlaying(recitation.key);
+            syncBannerButtons();
         } catch (error) {
             console.warn(error);
             showToast('تعذّر تحميل الصفحة ' + toArabicDigits(page) + '.');
@@ -232,8 +286,7 @@ function closeSlot(slot) {
     const page = Number(slot.dataset.page);
     const record = state.open.get(page);
     if (!record) return;
-    /* Leave the slot as tall as the page was, so the scroll position holds. */
-    slot.style.minHeight = Math.round(record.card.offsetHeight) + 'px';
+    /* The slot keeps its height, so every offset below it stays valid. */
     record.card.remove();
     state.open.delete(page);
 }
@@ -292,7 +345,11 @@ function sizeForCard(card, rows) {
 
     if (!widest) return 0;
     /* A hair of slack: glyph advances are rounded per size. */
-    return Math.max(8, (inner / widest) * REFERENCE * 0.997);
+    const byWidth = (inner / widest) * REFERENCE * 0.997;
+    /* The sheet of the print is taller than it is wide, so a wide page does not
+     * simply make the glyphs bigger. */
+    const bySheet = (inner / PAGE_ASPECT) / (PRINTED_LINES * LINE_RATIO);
+    return Math.max(8, Math.min(byWidth, bySheet));
 }
 
 /* The width a line takes when the page is wide enough; the words never wrap. */
@@ -311,26 +368,26 @@ function applySize(size) {
     updateSlotHeights();
 }
 
-/* Everything a page adds around its printed lines: padding, border, number. */
+/* Everything a page adds around its printed lines. Measured on a drawn page:
+ * the page padding, the border and the page number below the last line. */
 function measureExtra() {
     for (const record of state.open.values()) {
         const info = state.pageInfo.get(Number(record.slot.dataset.page));
         if (!info) continue;
-        const styles = getComputedStyle(record.card);
-        const vertical = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
-        state.extraHeight = record.card.offsetHeight - info.slots * state.size * LINE_RATIO - vertical;
+        state.extraHeight = record.card.offsetHeight - info.slots * state.size * LINE_RATIO;
         return;
     }
 }
 
 /* Every page is as tall as its printed lines; knowing that up front keeps the
- * scrollbar steady while pages are drawn and dropped. */
+ * scrollbar steady while pages are drawn and dropped, and lets the offsets of
+ * all 604 pages be cached once. */
 function updateSlotHeights() {
     if (!state.size) return;
     const lineHeight = state.size * LINE_RATIO;
     for (const slot of state.slots) {
         const info = state.pageInfo.get(Number(slot.dataset.page));
-        slot.style.minHeight = Math.round(info.slots * lineHeight + state.extraHeight + 2) + 'px';
+        slot.style.minHeight = Math.ceil(info.slots * lineHeight + state.extraHeight) + SLOT_MARGIN + 'px';
     }
     state.offsets = state.slots.map(slot => slot.offsetTop);
 }
@@ -358,6 +415,23 @@ const appbarHeight = () => el.appbar.offsetHeight;
 function pageFromHash() {
     const match = /^#p(\d+)$/.exec(location.hash);
     return match ? Number(match[1]) : 0;
+}
+
+/* #s18 = the page that surah 18 starts on; the view switch links here with it. */
+function chapterFromHash() {
+    const match = /^#s(\d+)$/.exec(location.hash);
+    return match ? Number(match[1]) : 0;
+}
+
+/* The surah a printed page belongs to: the last one starting at or before it.
+ * That is the surah the reader is handed when switching views. */
+function chapterOfPage(page) {
+    let chapter = state.chapters[0];
+    for (const item of state.chapters) {
+        if (item.firstPage > page) break;
+        chapter = item;
+    }
+    return chapter;
 }
 
 /* The printed page the reader is looking at: the last one under the app bar. */
@@ -389,6 +463,9 @@ function setCurrent(page) {
     el.chip.textContent = toArabicDigits(page);
     el.prev.disabled = page <= state.pages[0];
     el.next.disabled = page >= state.pages[state.pages.length - 1];
+    if (el.readerLink) {
+        el.readerLink.href = 'index.html?surah=' + chapterOfPage(page).id;
+    }
     if (location.hash !== '#p' + page) history.replaceState(null, '', '#p' + page);
 }
 
@@ -399,9 +476,23 @@ function goToPage(page, smooth) {
     setCurrent(page);
 }
 
+/* The observers draw and drop pages while scrolling; a jump over hundreds of
+ * pages can leave far-away pages drawn until they catch up, so the neighbours
+ * are checked again whenever the current page changes. */
+const KEEP_PAGES = 4;
+
+function trimFarPages() {
+    for (const [page, record] of [...state.open]) {
+        if (Math.abs(page - state.current) > KEEP_PAGES) closeSlot(record.slot);
+    }
+}
+
 function updateChrome() {
     const page = pageAtTop();
-    if (page !== state.current) setCurrent(page);
+    if (page !== state.current) {
+        setCurrent(page);
+        trimFarPages();
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -468,7 +559,7 @@ function openPopover(node) {
 
     const foot = element('div', 'popover__foot');
     foot.appendChild(element('span', 'popover__loc',
-        word.k + ' — الكلمة ' + toArabicDigits(word.p)));
+        toArabicDigits(word.k) + ' — الكلمة ' + toArabicDigits(word.p)));
     if (word.a) {
         const play = element('button', 'play-btn', 'سماع الكلمة');
         play.type = 'button';
@@ -490,10 +581,313 @@ function closePopover() {
 }
 
 /* ---------------------------------------------------------------------------
+ * Recitation — the ayah audio of the app, the same files index.js plays:
+ * QuranAudio/<reciter>/<sura><ayah>.mp3, <sura>000.mp3 being the basmala.
+ * ------------------------------------------------------------------------ */
+const recitation = {
+    audio: null,
+    key: null,          // the verse being recited, "18:5"
+    basmala: false,     // the file playing is the basmala that opens a surah
+    page: 0,            // the printed page the verse is on
+    timer: null
+};
+
+/* 002255.mp3 = surah 2, ayah 255; 002000.mp3 = the basmala of surah 2. */
+function padNumber(value) {
+    return String(value).padStart(3, '0');
+}
+
+function recitationPath(chapter, verse) {
+    return 'QuranAudio/' + encodeURIComponent(state.reciterId) + '/'
+        + padNumber(chapter) + padNumber(verse) + '.mp3';
+}
+
+/* The verse that follows this one, or null at the end of the Quran. */
+function nextVerse(key) {
+    const [chapter, verse] = key.split(':').map(Number);
+    const info = state.chapterById.get(chapter);
+    if (info && verse < info.versesCount) return chapter + ':' + (verse + 1);
+    return chapter < 114 ? (chapter + 1) + ':1' : null;
+}
+
+/* The page a verse sits on: verses follow each other, so the page is looked for
+ * near the one that is being recited, forward first. */
+async function pageOfVerse(key, fromPage) {
+    const first = state.pages[0];
+    const last = state.pages[state.pages.length - 1];
+    const start = Math.min(Math.max(fromPage || state.current, first), last);
+
+    let page = start;
+    for (let step = 0; step < 4 && page <= last; step += 1) {
+        const data = await pageData(page);
+        if (data.verses.some(verse => verse.k === key)) return page;
+        page += 1;
+    }
+
+    page = start;
+    for (let step = 0; step < 4 && page > first; step += 1) {
+        page -= 1;
+        const data = await pageData(page);
+        if (data.verses.some(verse => verse.k === key)) return page;
+    }
+    return state.current;
+}
+
+function markPlaying(key) {
+    for (const node of el.mushaf.querySelectorAll('.word.is-playing')) node.classList.remove('is-playing');
+    if (!key) return;
+    for (const node of el.mushaf.querySelectorAll('.word[data-loc^="' + key + ':"]')) {
+        node.classList.add('is-playing');
+    }
+}
+
+/* The word record behind a drawn word. */
+function wordOf(node) {
+    const card = node.closest('.page');
+    return card ? card._words.get(node.dataset.loc) : null;
+}
+
+/* The verse the reader is pointing at: the words they selected, or the word
+ * whose popover is open. Null when neither is there. */
+function verseFromContext() {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.rangeCount) {
+        const range = selection.getRangeAt(0);
+        for (const node of el.mushaf.querySelectorAll('.word')) {
+            if (!range.intersectsNode(node)) continue;
+            const word = wordOf(node);
+            if (word) return word.k;
+        }
+    }
+    if (state.openWord) {
+        const word = wordOf(state.openWord);
+        if (word) return word.k;
+    }
+    return null;
+}
+
+function syncListenButton() {
+    const playing = Boolean(recitation.key) && recitation.audio && !recitation.audio.paused;
+    const label = playing
+        ? 'إيقاف التلاوة مؤقتًا'
+        : (recitation.key ? 'متابعة التلاوة' : 'بدء التلاوة من الآية المحددة أو من هذه الصفحة');
+    el.listenToggle.classList.toggle('is-playing', Boolean(playing));
+    el.listenToggle.setAttribute('aria-pressed', String(Boolean(playing)));
+    el.listenToggle.setAttribute('aria-label', label);
+    el.listenToggle.title = label;
+    syncBannerButtons();
+}
+
+/* Keeps the play button in every surah banner in step with the recitation. */
+function syncBannerButtons() {
+    const activeChapter = recitation.key ? Number(recitation.key.split(':')[0]) : 0;
+    const playing = Boolean(recitation.key) && recitation.audio && !recitation.audio.paused;
+
+    for (const button of el.mushaf.querySelectorAll('.banner__play')) {
+        const isActive = Number(button.dataset.chapter) === activeChapter;
+        button.classList.toggle('is-active', isActive);
+        button.classList.toggle('is-playing', isActive && Boolean(playing));
+        const label = isActive
+            ? (playing ? 'إيقاف تلاوة السورة مؤقتًا' : 'متابعة تلاوة السورة')
+            : 'تلاوة السورة من أولها';
+        button.title = label;
+        button.setAttribute('aria-label', label);
+    }
+}
+
+function recitationAudio() {
+    if (!recitation.audio) {
+        recitation.audio = new Audio();
+        recitation.audio.addEventListener('ended', () => advanceRecitation());
+        recitation.audio.addEventListener('error', () => handleRecitationError());
+        recitation.audio.addEventListener('play', syncListenButton);
+        recitation.audio.addEventListener('pause', syncListenButton);
+    }
+    return recitation.audio;
+}
+
+/* Plays one file: the verse itself, or the basmala that opens its surah. */
+function playFile(key, basmala) {
+    const [chapter, verse] = key.split(':').map(Number);
+    recitation.key = key;
+    recitation.basmala = Boolean(basmala);
+    const audio = recitationAudio();
+    audio.src = recitationPath(chapter, basmala ? 0 : verse);
+    audio.play().catch(() => { /* real failures come through the error event */ });
+    markPlaying(key);
+    syncListenButton();
+}
+
+/* Keeps the recitation on screen by following it from page to page. */
+async function followVerse(key) {
+    const page = await pageOfVerse(key, recitation.page);
+    if (page !== recitation.page) {
+        recitation.page = page;
+        goToPage(page, true);
+    }
+}
+
+function playVerse(key, withBasmala) {
+    followVerse(key);
+    playFile(key, Boolean(withBasmala));
+}
+
+function advanceRecitation() {
+    if (!recitation.key) return;
+    /* The basmala is followed by the first verse of its surah. */
+    if (recitation.basmala) {
+        playVerse(recitation.key, false);
+        return;
+    }
+    const next = nextVerse(recitation.key);
+    if (!next) {
+        showToast('انتهت التلاوة — بلغت آخر المصحف.');
+        stopRecitation();
+        return;
+    }
+    const nextChapter = Number(next.split(':')[0]);
+    /* A surah is opened with its basmala; surah 1 is the basmala itself and
+       surah 9 has none (the same rule as index.js). */
+    const withBasmala = next.endsWith(':1') && nextChapter !== 1 && nextChapter !== 9;
+    clearTimeout(recitation.timer);
+    recitation.timer = setTimeout(() => playVerse(next, withBasmala), AYAH_GAP_MS);
+}
+
+function handleRecitationError() {
+    const error = recitation.audio ? recitation.audio.error : null;
+    if (!error || error.code === 1 || !recitation.key) return;   // 1 = aborted
+    console.warn('Could not load ' + (recitation.audio ? recitation.audio.src : ''), error);
+
+    /* A missing basmala should not stop the recitation. */
+    if (recitation.basmala) {
+        showToast('ملف البسملة غير متوفّر، تم تخطّيه.');
+        playVerse(recitation.key, false);
+        return;
+    }
+    showToast(error.code === 2
+        ? 'تعذّر الوصول إلى ملفات التلاوة. تأكّد من تشغيل الخادم.'
+        : 'ملف التلاوة غير موجود.');
+    stopRecitation();
+}
+
+function stopRecitation() {
+    clearTimeout(recitation.timer);
+    recitation.timer = null;
+    if (recitation.audio) recitation.audio.pause();
+    recitation.key = null;
+    recitation.basmala = false;
+    markPlaying(null);
+    syncListenButton();
+}
+
+async function startRecitation(key) {
+    const data = await pageData(state.current);
+    const target = key || (data.verses[0] ? data.verses[0].k : null);
+    if (!target) return;
+    recitation.page = state.current;
+    playVerse(target, false);
+}
+
+/* Recites a whole surah: its basmala first, like the app does. */
+function playSurah(chapter) {
+    if (!state.reciterId) {
+        showToast('لا توجد ملفات تلاوة — تأكّد من QuranAudio/reciters.json.');
+        return;
+    }
+    const info = state.chapterById.get(chapter);
+    if (!info) return;
+
+    /* The surah being recited: its own button pauses or resumes. */
+    if (recitation.key && Number(recitation.key.split(':')[0]) === chapter) {
+        const audio = recitationAudio();
+        if (audio.paused) audio.play().catch(() => { });
+        else audio.pause();
+        syncListenButton();
+        return;
+    }
+
+    recitation.page = info.firstPage;
+    /* Surah 1 is the basmala itself and surah 9 has none. */
+    playVerse(chapter + ':1', chapter !== 1 && chapter !== 9);
+}
+
+function toggleRecitation() {
+    if (!state.reciterId) {
+        showToast('لا توجد ملفات تلاوة — تأكّد من QuranAudio/reciters.json.');
+        return;
+    }
+
+    /* A selected verse, or an open word, reads as "play from here". */
+    const context = verseFromContext();
+    if (context && context !== recitation.key) {
+        startRecitation(context);
+        return;
+    }
+
+    if (!recitation.key) {
+        startRecitation(null);
+        return;
+    }
+
+    const audio = recitationAudio();
+    if (audio.paused) audio.play().catch(() => { });
+    else audio.pause();
+    syncListenButton();
+}
+
+/* The reciters of QuranAudio/reciters.json; the choice is remembered. */
+async function loadReciters() {
+    try {
+        const data = await getJson(RECITERS_URL);
+        state.reciters = Array.isArray(data) ? data : (data ? [data] : []);
+    } catch (error) {
+        console.warn('Could not read ' + RECITERS_URL, error);
+        state.reciters = [];
+    }
+
+    if (!state.reciters.length) {
+        el.listenToggle.hidden = true;
+        el.reciterPicker.hidden = true;
+        return;
+    }
+
+    el.reciterSelect.textContent = '';
+    for (const reciter of state.reciters) {
+        const option = element('option', null, reciter.name);
+        option.value = reciter.id;
+        el.reciterSelect.appendChild(option);
+    }
+
+    let stored = null;
+    try {
+        stored = localStorage.getItem(RECITER_KEY);
+    } catch (error) {
+        stored = null;
+    }
+    state.reciterId = state.reciters.some(reciter => reciter.id === stored)
+        ? stored
+        : state.reciters[0].id;
+    el.reciterSelect.value = state.reciterId;
+    el.reciterSelect.disabled = false;
+    el.listenToggle.hidden = false;
+    el.reciterPicker.hidden = false;
+}
+
+/* ---------------------------------------------------------------------------
  * Surah picker, theme, events and start-up
  * ------------------------------------------------------------------------ */
 function buildSurahList() {
     const fragment = document.createDocumentFragment();
+
+    /* The random surah button lives in the bar on wide screens, and here on
+     * phones, where the bar has no room for it. */
+    const random = element('button', 'surah-item');
+    random.type = 'button';
+    random.dataset.random = '1';
+    random.appendChild(element('span', 'surah-item__num', '⚄'));
+    random.appendChild(element('span', 'surah-item__name', 'سورة عشوائية'));
+    fragment.appendChild(random);
+
     for (const chapter of state.chapters) {
         const item = element('button', 'surah-item');
         item.type = 'button';
@@ -524,11 +918,20 @@ function buildSlots() {
 function filterSurahs() {
     const query = el.surahFilter.value.trim().toLowerCase();
     for (const item of el.surahList.children) {
+        if (item.dataset.random) {
+            item.hidden = Boolean(query);   // hidden while searching
+            continue;
+        }
         item.hidden = Boolean(query) && !item.dataset.search.includes(query);
     }
 }
 
+function randomChapter() {
+    return state.chapters[Math.floor(Math.random() * state.chapters.length)];
+}
+
 function setPanel(open) {
+    if (open) setMenu(false);
     el.surahPanel.hidden = !open;
     el.surahToggle.setAttribute('aria-expanded', String(open));
     if (open) {
@@ -539,6 +942,48 @@ function setPanel(open) {
     }
 }
 
+/* The tools menu: a dropdown on small screens, and the plain row of tools on
+ * wide ones, where the button is hidden and this only keeps the state. */
+function setMenu(open) {
+    el.appbar.classList.toggle('is-menu-open', open);
+    el.toolsToggle.setAttribute('aria-expanded', String(open));
+    if (open) setPanel(false);
+    resetBarTimer();
+}
+
+/* ---------------------------------------------------------------------------
+ * The bar slides away while nothing is going on, and returns on the next
+ * scroll, touch or hover.
+ * ------------------------------------------------------------------------ */
+const BAR_IDLE_MS = 2600;
+let barTimer = null;
+
+/* Kept on screen while the reader is using it. */
+function barBusy() {
+    return !el.surahPanel.hidden
+        || el.appbar.classList.contains('is-menu-open')
+        || el.appbar.matches(':hover')
+        || el.appbar.contains(document.activeElement);
+}
+
+function hideBar() {
+    if (barBusy()) {
+        resetBarTimer();
+        return;
+    }
+    el.appbar.classList.add('is-hidden');
+}
+
+function showBar() {
+    el.appbar.classList.remove('is-hidden');
+    resetBarTimer();
+}
+
+function resetBarTimer() {
+    clearTimeout(barTimer);
+    barTimer = setTimeout(hideBar, BAR_IDLE_MS);
+}
+
 function setTheme(theme) {
     const light = theme === 'light';
     document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
@@ -547,6 +992,9 @@ function setTheme(theme) {
     } catch (error) {
         /* private mode: the choice just will not be remembered */
     }
+    /* The browser chrome follows the page background. */
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', light ? '#f7f5ef' : '#0a0f10');
     el.theme.title = light ? 'تفعيل الوضع الليلي' : 'تفعيل الوضع النهاري';
     el.theme.setAttribute('aria-label', el.theme.title);
 }
@@ -556,8 +1004,18 @@ function wireEvents() {
     el.next.addEventListener('click', () => goToPage(state.current + 1, true));
 
     el.random.addEventListener('click', () => {
-        const chapter = state.chapters[Math.floor(Math.random() * state.chapters.length)];
-        goToPage(chapter.firstPage, false);
+        goToPage(randomChapter().firstPage, false);
+    });
+
+    el.listenToggle.addEventListener('click', toggleRecitation);
+    el.reciterSelect.addEventListener('change', () => {
+        state.reciterId = el.reciterSelect.value;
+        try {
+            localStorage.setItem(RECITER_KEY, state.reciterId);
+        } catch (error) {
+            /* private mode: the choice just will not be remembered */
+        }
+        stopRecitation();
     });
 
     el.theme.addEventListener('click', () => {
@@ -570,6 +1028,10 @@ function wireEvents() {
         const item = event.target.closest('.surah-item');
         if (!item) return;
         setPanel(false);
+        if (item.dataset.random) {
+            goToPage(randomChapter().firstPage, false);
+            return;
+        }
         goToPage(Number(item.dataset.page), false);
     });
 
@@ -589,6 +1051,11 @@ function wireEvents() {
 
     document.addEventListener('click', event => {
         if (!el.surahPanel.hidden && !event.target.closest('#surah-picker')) setPanel(false);
+        if (el.appbar.classList.contains('is-menu-open')
+            && !event.target.closest('#appbar-tools')
+            && !event.target.closest('#tools-toggle')) {
+            setMenu(false);
+        }
         if (el.popover.contains(event.target) || event.target.closest('.word')) return;
         closePopover();
     });
@@ -596,6 +1063,7 @@ function wireEvents() {
     document.addEventListener('keydown', event => {
         if (event.key === 'Escape') {
             setPanel(false);
+            setMenu(false);
             closePopover();
             return;
         }
@@ -604,9 +1072,11 @@ function wireEvents() {
         if (event.key === 'ArrowRight') goToPage(state.current - 1, true);
     });
 
-    /* The app bar follows the scroll, so it always shows the page under it. */
+    /* The app bar follows the scroll, so it always shows the page under it, and
+     * it comes back as soon as the reader scrolls. */
     let scrollPending = false;
     window.addEventListener('scroll', () => {
+        showBar();
         if (scrollPending) return;
         scrollPending = true;
         requestAnimationFrame(() => {
@@ -615,18 +1085,54 @@ function wireEvents() {
         });
     }, { passive: true });
 
+    /* Touching, pointing at or tabbing into the bar keeps it on screen. */
+    el.appbar.addEventListener('pointerenter', showBar);
+    el.appbar.addEventListener('pointerdown', showBar);
+    el.appbar.addEventListener('focusin', showBar);
+    el.appbar.addEventListener('pointerleave', resetBarTimer);
+    window.addEventListener('mousemove', event => {
+        if (event.clientY <= appbarHeight() + 24) showBar();
+    }, { passive: true });
+
+    el.toolsToggle.addEventListener('click', () => {
+        setMenu(!el.appbar.classList.contains('is-menu-open'));
+    });
+
+    resetBarTimer();
+
     window.addEventListener('resize', debounce(() => {
         document.documentElement.style.setProperty('--appbar-h', appbarHeight() + 'px');
         refit();
     }, 150));
 
+    /* The glyph size follows the container width, and that width can change
+     * without a window resize (rotation, a folded pane, an emulated viewport),
+     * so the container itself is watched as well. */
+    if ('ResizeObserver' in window) {
+        let lastWidth = el.mushaf.clientWidth;
+        const refitOnWidth = debounce(() => refit(), 120);
+        new ResizeObserver(() => {
+            const width = el.mushaf.clientWidth;
+            if (Math.abs(width - lastWidth) < 1) return;
+            lastWidth = width;
+            document.documentElement.style.setProperty('--appbar-h', appbarHeight() + 'px');
+            refitOnWidth();
+        }).observe(el.mushaf);
+    }
+
     window.addEventListener('hashchange', () => {
         const page = pageFromHash();
+        const chapter = state.chapterById.get(chapterFromHash());
         if (page) goToPage(page, false);
+        else if (chapter) goToPage(chapter.firstPage, false);
     });
 }
 
 async function init() {
+    /* The reader's place comes from the hash, not from the browser's own scroll
+     * restoration, which would fight the jump below. */
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+
     try {
         state.manifest = await getJson(MANIFEST_URL);
     } catch (error) {
@@ -636,6 +1142,7 @@ async function init() {
     }
 
     state.chapters = state.manifest.chapters;
+    state.chapterById = new Map(state.chapters.map(chapter => [chapter.id, chapter]));
     state.pages = state.manifest.pages.map(info => info.page);
     state.pageInfo = new Map(state.manifest.pages.map(info => [info.page, info]));
 
@@ -652,10 +1159,16 @@ async function init() {
     });
     ensureFont('Uthmanic', 'fonts/uthmanic_hafs_v22.ttf');
 
-    /* Draw the page the reader asked for first: that page fixes the glyph size,
-     * and the size fixes how tall every page is. */
-    const wanted = pageFromHash();
-    const start = state.pageInfo.has(wanted) ? wanted : state.pages[0];
+    /* The reciter list only fills the toolbar; the reader does not wait for it. */
+    loadReciters();
+
+    /* #p293 opens a printed page and #s18 the page where surah 18 begins; the
+     * page drawn first fixes the glyph size, and the size every page height. */
+    const wantedPage = pageFromHash();
+    const wantedChapter = state.chapterById.get(chapterFromHash());
+    const start = state.pageInfo.has(wantedPage)
+        ? wantedPage
+        : (wantedChapter ? wantedChapter.firstPage : state.pages[0]);
     await openSlot(slotFor(start));
     refit();
     scrollToPage(start, false);

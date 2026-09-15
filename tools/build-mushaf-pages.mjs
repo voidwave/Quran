@@ -93,7 +93,7 @@ async function runPool(items, limit, worker) {
     const runners = [];
     for (let i = 0; i < Math.min(limit, queue.length); i += 1) {
         runners.push((async () => {
-            for (;;) {
+            for (; ;) {
                 const item = queue.shift();
                 if (item === undefined) return;
                 await worker(item);
@@ -107,7 +107,7 @@ async function runPool(items, limit, worker) {
 async function fetchPageVerses(pageNumber) {
     const verses = [];
     let pageParam = 1;
-    for (;;) {
+    for (; ;) {
         const url = `${API}/verses/by_page/${pageNumber}?words=true&word_fields=${WORD_FIELDS}` +
             `&per_page=50&page=${pageParam}`;
         const data = await getJson(url);

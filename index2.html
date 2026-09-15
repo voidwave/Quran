@@ -49,8 +49,21 @@
             --accent-soft: rgba(226, 190, 106, 0.14);
             --on-accent: #1b1508;
             --appbar: rgba(10, 15, 16, 0.86);
-            --paper: #f8f3e6;
-            --paper-ink: #1c1a14;
+            /* The printed sheet. Dark theme: dark paper, light ink — the glyphs
+               are vector outlines, so only paper and ink change. */
+            --paper-1: #171d1c;
+            --paper-2: #101514;
+            --paper-ink: #ece4d0;
+            --paper-border: rgba(226, 190, 106, 0.28);
+            --paper-glow: rgba(226, 190, 106, 0.06);
+            --paper-rule: rgba(226, 190, 106, 0.35);
+            --paper-number: #a4905e;
+            --paper-banner-1: rgba(226, 190, 106, 0.13);
+            --paper-banner-2: rgba(226, 190, 106, 0.03);
+            --paper-hover: rgba(226, 190, 106, 0.14);
+            --paper-active: rgba(226, 190, 106, 0.3);
+            --paper-ring: rgba(226, 190, 106, 0.55);
+            --paper-button: rgba(255, 255, 255, 0.06);
             --font-ui: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
             --font-ar: "Noto Naskh Arabic", "Segoe UI", Tahoma, serif;
 
@@ -75,6 +88,20 @@
             --accent: #96701d;
             --accent-soft: rgba(150, 112, 28, 0.12);
             --on-accent: #fffaf0;
+            /* The printed sheet: cream paper, dark ink. */
+            --paper-1: #fbf7ec;
+            --paper-2: #f1e9d5;
+            --paper-ink: #1c1a14;
+            --paper-border: rgba(201, 162, 79, 0.45);
+            --paper-glow: rgba(201, 162, 79, 0.10);
+            --paper-rule: rgba(160, 122, 40, 0.5);
+            --paper-number: #7d6a35;
+            --paper-banner-1: rgba(226, 190, 106, 0.2);
+            --paper-banner-2: rgba(226, 190, 106, 0.05);
+            --paper-hover: rgba(201, 162, 79, 0.25);
+            --paper-active: rgba(201, 162, 79, 0.42);
+            --paper-ring: rgba(160, 122, 40, 0.7);
+            --paper-button: rgba(255, 255, 255, 0.55);
         }
 
         * {
@@ -106,6 +133,19 @@
             border-bottom: 1px solid var(--border);
             backdrop-filter: blur(14px);
             -webkit-backdrop-filter: blur(14px);
+            transition: transform 260ms ease;
+        }
+
+        /* Slides away while the reader is not scrolling, and comes back on the
+           next scroll, touch or hover. */
+        .appbar.is-hidden {
+            transform: translateY(-100%);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .appbar {
+                transition: none;
+            }
         }
 
         .appbar__inner {
@@ -124,6 +164,11 @@
             gap: 8px;
             align-items: center;
             margin-inline-start: auto;
+        }
+
+        /* Only small screens need the menu button; wide ones show the tools. */
+        #tools-toggle {
+            display: none;
         }
 
         .btn {
@@ -185,7 +230,9 @@
             color: var(--accent);
             border-radius: 999px;
             padding: 8px 12px;
-            font-family: 'Uthmanic', var(--font-ar);
+            /* The Uthmanic font draws digits as decorated mushaf symbols, so
+               numbers use the plain font. */
+            font-family: var(--font-ar);
             font-size: 17px;
             line-height: 1.4;
         }
@@ -282,6 +329,123 @@
         }
 
         /* ------------------------------------------------------------------
+           Switch between the reader and the Mushaf view
+        ------------------------------------------------------------------ */
+        .view-switch {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface-2);
+        }
+
+        .view-switch__option {
+            display: inline-flex;
+            align-items: center;
+            min-height: 34px;
+            padding: 4px 15px;
+            border-radius: 9px;
+            color: var(--muted);
+            font-family: var(--font-ar);
+            font-size: 0.92rem;
+            font-weight: 600;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: background-color 160ms ease, color 160ms ease;
+        }
+
+        .view-switch__option:hover {
+            color: var(--text);
+        }
+
+        .view-switch__option.is-active {
+            background: var(--accent);
+            color: var(--on-accent);
+        }
+
+        /* ------------------------------------------------------------------
+           Recitation: play the page with the chosen reciter
+        ------------------------------------------------------------------ */
+        .listen-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        #listen-toggle .icon-pause {
+            display: none;
+        }
+
+        #listen-toggle.is-playing .icon-play {
+            display: none;
+        }
+
+        #listen-toggle.is-playing .icon-pause {
+            display: block;
+        }
+
+        .reciter-picker {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .reciter-select {
+            min-height: 42px;
+            max-width: 11rem;
+            padding: 8px 12px 8px 30px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface-2);
+            color: var(--text);
+            font-family: var(--font-ar);
+            font-size: 0.95rem;
+            font-weight: 600;
+            line-height: 1.3;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            appearance: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+        }
+
+        .reciter-select:hover {
+            border-color: var(--border-strong, rgba(226, 190, 106, 0.4));
+            background: var(--surface-3);
+        }
+
+        .reciter-select:focus-visible {
+            outline: 2px solid var(--accent-soft);
+            outline-offset: 2px;
+        }
+
+        .reciter-select[disabled] {
+            opacity: 0.45;
+            cursor: progress;
+        }
+
+        .reciter-picker::after {
+            position: absolute;
+            inset-inline-end: 11px;
+            top: 50%;
+            width: 7px;
+            height: 7px;
+            border-right: 2px solid var(--muted);
+            border-bottom: 2px solid var(--muted);
+            transform: translateY(-65%) rotate(45deg);
+            pointer-events: none;
+            content: "";
+        }
+
+        /* The verse being recited, on whatever page is drawn. */
+        .word.is-playing {
+            background: var(--paper-active);
+            box-shadow: 0 0 0 1px var(--paper-ring);
+            border-radius: 0.16em;
+        }
+
+        /* ------------------------------------------------------------------
            The stacked pages
         ------------------------------------------------------------------ */
         #mushaf {
@@ -297,6 +461,8 @@
         .page-slot {
             display: flex;
             justify-content: center;
+            /* never stretch the page: its own height is what gets measured */
+            align-items: flex-start;
             width: 100%;
             scroll-margin-top: calc(var(--appbar-h) + 10px);
         }
@@ -315,11 +481,12 @@
         .page {
             width: min(100%, 820px);
             padding: clamp(14px, 2.4vw, 30px);
-            background: linear-gradient(180deg, #fbf7ec, #f1e9d5);
+            /* the sheet follows the theme, so dark mode has dark pages */
+            background: linear-gradient(180deg, var(--paper-1), var(--paper-2));
             color: var(--paper-ink);
-            border: 1px solid rgba(201, 162, 79, 0.45);
+            border: 1px solid var(--paper-border);
             border-radius: 14px;
-            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), inset 0 0 0 6px rgba(201, 162, 79, 0.10);
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), inset 0 0 0 6px var(--paper-glow);
         }
 
         .page__lines {
@@ -351,24 +518,25 @@
         }
 
         .word:hover {
-            background: rgba(201, 162, 79, 0.25);
+            background: var(--paper-hover);
         }
 
         .word.is-open {
-            background: rgba(201, 162, 79, 0.42);
+            background: var(--paper-active);
         }
 
         .word:focus-visible {
-            outline: 2px solid rgba(160, 122, 40, 0.7);
+            outline: 2px solid var(--paper-ring);
             outline-offset: 1px;
         }
 
         .page__number {
             text-align: center;
             margin-top: 0.5em;
-            font-family: 'Uthmanic', serif;
-            font-size: calc(var(--fs) * 0.5);
-            color: #7d6a35;
+            /* plain numbers: the Uthmanic font would draw them as symbols */
+            font-family: var(--font-ar);
+            font-size: max(11px, calc(var(--fs) * 0.45));
+            color: var(--paper-number);
         }
 
         /* The decorated surah banner that opens a surah in the print. In the
@@ -382,9 +550,9 @@
             gap: calc(var(--fs) * 0.06);
             min-height: calc(var(--lh) * 2);
             padding: calc(var(--fs) * 0.08) calc(var(--fs) * 0.5);
-            border: 1.5px solid rgba(160, 122, 40, 0.5);
+            border: 1.5px solid var(--paper-rule);
             border-radius: calc(var(--fs) * 0.3);
-            background: linear-gradient(180deg, rgba(226, 190, 106, 0.2), rgba(226, 190, 106, 0.05));
+            background: linear-gradient(180deg, var(--paper-banner-1), var(--paper-banner-2));
         }
 
         /* The cartouche itself comes from a ligature font: "018" -> the
@@ -401,10 +569,68 @@
             visibility: visible;
         }
 
+        .banner__head {
+            display: flex;
+            gap: calc(var(--fs) * 0.3);
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* The play button beside the surah name: recites that surah. */
+        .banner__play {
+            display: inline-grid;
+            place-items: center;
+            /* never smaller than a comfortable tap, however small the page is */
+            width: max(30px, calc(var(--fs) * 0.62));
+            height: max(30px, calc(var(--fs) * 0.62));
+            padding: 0;
+            border: 1px solid var(--paper-rule);
+            border-radius: 50%;
+            background: var(--paper-button);
+            color: var(--paper-number);
+            cursor: pointer;
+            transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .banner__play svg {
+            width: 55%;
+            height: 55%;
+        }
+
+        .banner__play:hover {
+            background: var(--paper-hover);
+            border-color: var(--paper-ring);
+            color: var(--paper-ink);
+        }
+
+        .banner__play:focus-visible {
+            outline: 2px solid var(--paper-ring);
+            outline-offset: 2px;
+        }
+
+        .banner__play.is-active {
+            background: var(--paper-active);
+            border-color: var(--paper-ring);
+            color: var(--paper-ink);
+        }
+
+        .banner__play .icon-pause {
+            display: none;
+        }
+
+        .banner__play.is-playing .icon-play {
+            display: none;
+        }
+
+        .banner__play.is-playing .icon-pause {
+            display: block;
+        }
+
         .banner__basmala {
             font-family: 'Uthmanic', serif;
             font-size: calc(var(--fs) * 0.62);
-            color: #2b2413;
+            color: var(--paper-ink);
+            opacity: 0.92;
         }
 
         /* The real verse text, kept in the DOM for search engines and screen
@@ -501,7 +727,9 @@
             line-height: 1.9;
         }
 
-        /* On small screens the labels go and the tools stay on one row. */
+        /* Small screens: the bar itself stays short, and the extra tools (the
+         * reciter, the random surah and the theme) drop out of the menu button
+         * instead of taking rows of their own. */
         @media (max-width: 700px) {
             .btn__label {
                 display: none;
@@ -511,13 +739,84 @@
                 display: inline;
             }
 
-            .appbar__tools {
-                margin-inline-start: 0;
+            .appbar__inner {
+                gap: 8px;
             }
 
+            #tools-toggle {
+                display: inline-flex;
+            }
+
+            .appbar__tools {
+                position: absolute;
+                top: 100%;
+                inset-inline: 0;
+                display: none;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+                margin-inline-start: 0;
+                padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+                background: var(--surface);
+                border-bottom: 1px solid var(--border);
+                box-shadow: var(--shadow);
+            }
+
+            .appbar.is-menu-open .appbar__tools {
+                display: flex;
+            }
+
+            /* The menu has room for the labels the squeezed bar has to drop. */
+            .appbar__tools .btn {
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .appbar__tools .btn__label {
+                display: inline;
+            }
+
+            .appbar__tools .reciter-picker,
+            .appbar__tools .reciter-select {
+                width: 100%;
+                max-width: none;
+            }
+
+            .reciter-select {
+                font-size: 0.9rem;
+            }
+
+            /* The controls are a little tighter so the whole bar stays one row. */
             .chip {
-                min-width: 54px;
+                min-width: 44px;
+                padding: 8px 9px;
                 font-size: 15px;
+            }
+
+            .pager .btn {
+                padding: 8px 8px;
+            }
+
+            .listen-group {
+                gap: 6px;
+            }
+
+            .view-switch__option {
+                min-height: 40px;
+                padding: 4px 8px;
+                font-size: 0.85rem;
+            }
+        }
+
+        /* Phones: tighten the bar a little more. */
+        @media (max-width: 480px) {
+            .appbar__inner {
+                gap: 8px;
+                padding: 8px 0;
+            }
+
+            .btn {
+                padding: 8px 11px;
             }
         }
     </style>
@@ -559,7 +858,34 @@
                 </button>
             </div>
 
-            <div class="appbar__tools">
+            <div class="listen-group">
+                <button id="listen-toggle" class="btn" type="button" aria-label="بدء التلاوة من هذه الصفحة"
+                    aria-pressed="false" title="بدء التلاوة من هذه الصفحة" hidden>
+                    <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M7 4.5v15l13-7.5z"></path>
+                    </svg>
+                    <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z"></path>
+                    </svg>
+                    <span class="btn__label">التلاوة</span>
+                </button>
+            </div>
+
+            <div class="view-switch" role="group" aria-label="التنقل بين القارئ والمصحف">
+                <a class="view-switch__option" id="reader-link" href="index.html"
+                    title="فتح القارئ: النص العثماني مع التفاسير والترجمات والبحث">القارئ</a>
+                <span class="view-switch__option is-active" aria-current="page">المصحف</span>
+            </div>
+
+            <button id="tools-toggle" class="btn" type="button" aria-label="أدوات أخرى" aria-expanded="false"
+                aria-controls="appbar-tools" title="أدوات أخرى">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    aria-hidden="true">
+                    <path d="M12 5h.01M12 12h.01M12 19h.01"></path>
+                </svg>
+            </button>
+
+            <div class="appbar__tools" id="appbar-tools">
                 <button id="random-button" class="btn" type="button" aria-label="سورة عشوائية" title="سورة عشوائية">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
                         stroke-linejoin="round" aria-hidden="true">
@@ -586,13 +912,11 @@
                     </svg>
                     <span class="btn__label">الوضع</span>
                 </button>
-                <a class="btn" href="index.html" title="فتح قارئ القرآن">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                        aria-hidden="true">
-                        <path d="M4 6h16M4 12h16M4 18h10"></path>
-                    </svg>
-                    <span class="btn__label">القارئ</span>
-                </a>
+                <label class="reciter-picker" id="reciter-picker" title="اختر القارئ" hidden>
+                    <select id="reciter-select" class="reciter-select" aria-label="اختر القارئ" disabled>
+                        <option value="">جارٍ التحميل…</option>
+                    </select>
+                </label>
             </div>
         </div>
     </header>
