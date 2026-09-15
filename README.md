@@ -58,6 +58,8 @@ Then open http://localhost:8123/.
 ```
 index.html                          # the app (UI, styles, theme bootstrap)
 index.js                            # app logic: text, sources, search, audio
+index2.html                         # standalone Mushaf page view (test)
+index2.js                           # its logic: glyph layer, layout, copy
 QuranText/
   Quran/                            # Tanzil Quran text XML files
   Arabic-Tafsir/                    # Arabic tafsirs
@@ -69,10 +71,13 @@ QuranAudio/
   <Reciter-Name>/                   # <sura3><ayah3>.mp3 (e.g. 002255.mp3)
 flags/                              # flag images shown next to each source
 fonts/                              # Uthmanic Hafs font
+fonts/mushaf/                       # QPC page fonts + surah name cartouches
+QuranText/MushafPages/              # per-page word data (words, glyphs, printed lines)
 tools/
   serve.js                          # local dev server
   download-tanzil-translations.ps1  # download/refresh tafsirs & translations
   build-reciter-list.ps1            # rebuild QuranAudio/reciters.json
+  build-mushaf-pages.mjs            # build the Mushaf page data + page fonts
 ```
 
 ## 🛠️ Tools
@@ -83,7 +88,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\download-tanzil-tran
 
 # rebuild the reciters list from the QuranAudio folders
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-reciter-list.ps1
+
+# build the Mushaf page data and page fonts of a surah (default: 18)
+node tools/build-mushaf-pages.mjs 18
 ```
+
+---
+
+## 📖 Mushaf page view (test)
+
+`index2.html` is a standalone test page that draws the Quran the way the printed Mushaf does, using the same technique as quran.com:
+
+- Every **word** is one glyph of a per-page font (`fonts/mushaf/p<page>.woff2`), so each word is a single vector shape in its exact printed form, while the page stays light enough to serve like plain text.
+- The words are grouped per printed line and spread over the full page width, so the text breaks exactly where the printed page breaks (15 lines a page, two of which a surah banner takes).
+- The real ʿUthmānī word is kept behind every glyph: selection stops at word boundaries, and the copy handler replaces the glyphs with the real words — copying gives you `ٱلْحَمْدُ لِلَّهِ ٱلَّذِىٓ أَنزَلَ`, never code points.
+- Word meanings, transliterations and word-by-word recitation are one click away.
+
+The data (words, glyph code points, printed line numbers, real text, word audio) is built once per surah into `QuranText/MushafPages/` by `tools/build-mushaf-pages.mjs`, together with the page fonts. Those fonts belong to the King Fahd Complex (served through quran.com) and are downloaded here for local development — check the [QUL](https://qul.tarteel.ai) licence before publishing.
 
 ---
 
@@ -145,6 +166,8 @@ node tools/serve.js 3000   # منفذ مخصص
 ```
 index.html                          # التطبيق (الواجهة والأنماط وتفعيل الثيم)
 index.js                            # منطق التطبيق: النص والمصادر والبحث والصوت
+index2.html                         # عرض صفحات المصحف (صفحة تجريبية مستقلة)
+index2.js                           # منطقها: طبقة الرسوم والتوزيع والنسخ
 QuranText/
   Quran/                            # ملفات نص القرآن من Tanzil
   Arabic-Tafsir/                    # التفاسير العربية
@@ -156,11 +179,25 @@ QuranAudio/
   <اسم القارئ>/                     # <السورة><الآية>.mp3 مثل 002255.mp3
 flags/                              # صور الأعلام بجانب كل مصدر
 fonts/                              # خط عثماني حفص
+fonts/mushaf/                       # خطوط صفحات المصحف وترويسات أسماء السور
+QuranText/MushafPages/              # بيانات كل صفحة (الكلمات ورموز الخطوط والأسطر)
 tools/
   serve.js                          # خادم محلي للتطوير
   download-tanzil-translations.ps1  # تنزيل/تحديث التفاسير والترجمات
   build-reciter-list.ps1            # إعادة بناء ملف QuranAudio/reciters.json
+  build-mushaf-pages.mjs            # بناء بيانات صفحات المصحف وخطوطها
 ```
+
+## 📖 عرض صفحات المصحف (تجريبي)
+
+`index2.html` صفحة مستقلة ترسم النص كما في المصحف المطبوع، بالطريقة نفسها التي يستخدمها quran.com:
+
+- كل **كلمة** رسم متجهي واحد من خط الصفحة (`fonts/mushaf/p<page>.woff2`)، فتبقى الصفحة خفيفة وتُقدَّم كالنص العادي.
+- تُجمَّع الكلمات في أسطر الصفحة المطبوعة وتُوزَّع على عرضها كاملًا، فينكسر النص حيث ينكسر في المطبوع (١٥ سطرًا للصفحة، يشغل سطران منها ترويسة السورة).
+- النص العثماني الحقيقي محفوظ خلف كل رسمة: يقف التحديد عند حدود الكلمة، وعند النسخ تُستبدل الرسوم بالكلمات الحقيقية — فتحصل على `ٱلْحَمْدُ لِلَّهِ ٱلَّذِىٓ أَنزَلَ` لا على رموز الخط.
+- معنى الكلمة ونقلها الصوتي وتلاوتها على مستوى الكلمة بضغطة واحدة.
+
+تُبنى البيانات (الكلمات ورموز الخطوط وأرقام الأسطر والنص الحقيقي والصوت) مرة واحدة لكل سورة عبر `tools/build-mushaf-pages.mjs` وحفظها في `QuranText/MushafPages/` مع خطوط الصفحات. هذه الخطوط ملك لمجمّع الملك فهد (تُقدَّم عبر quran.com)، ونُزِّلت هنا للتجربة المحلية — فراجع رخصة [QUL](https://qul.tarteel.ai) قبل النشر.
 
 ## 🤲 دعاء
 
