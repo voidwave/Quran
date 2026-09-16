@@ -42,6 +42,7 @@
  *
  * Output:
  *     QuranText/MushafPages/index.json        all chapters + page index ("all")
+ *     QuranText/MushafPages/verse-pages.json  verse -> page index ("all")
  *     QuranText/MushafPages/ch<chapter>.json  one chapter (single-chapter run)
  *     QuranText/MushafPages/p<page>.json      words and verses of one page
  *     fonts/mushaf/p<page>.woff2              the page font
@@ -229,12 +230,18 @@ async function buildOnePage(pageNumber, entries, texts) {
 
     const fontBytes = await download(fontUrl(pageNumber), path.join(FONT_DIR, `p${pageNumber}.woff2`));
     return {
-        page: pageNumber,
-        slots: built.lines.length + banners * 2,
-        verses: built.verses.length,
-        words: built.lines.reduce((total, line) => total + line.words.length, 0),
-        font: `fonts/mushaf/p${pageNumber}.woff2`,
-        fontBytes
+        info: {
+            page: pageNumber,
+            slots: built.lines.length + banners * 2,
+            verses: built.verses.length,
+            words: built.lines.reduce((total, line) => total + line.words.length, 0),
+            font: `fonts/mushaf/p${pageNumber}.woff2`,
+            fontBytes
+        },
+        /* The last verse written on the page; the whole-Quran run collects
+         * these into verse-pages.json (see tools/build-verse-pages.mjs for
+         * single-chapter runs). */
+        lastVerse: built.verses.length ? built.verses[built.verses.length - 1].k : null
     };
 }
 
@@ -284,18 +291,31 @@ async function main() {
         : `Surah ${selected[0].name_simple} (${chapter}) — pages ${pageNumbers[0]}-${pageNumbers[pageNumbers.length - 1]}`);
 
     const pages = [];
+    const versePages = [];   // [page, last verse] pairs, for verse-pages.json
     let done = 0;
     let megabytes = 0;
     await runPool(pageNumbers, 3, async pageNumber => {
-        const info = await buildOnePage(pageNumber, wordsByPage.get(pageNumber) || [], texts);
+        const { info, lastVerse } = await buildOnePage(pageNumber, wordsByPage.get(pageNumber) || [], texts);
         megabytes += info.fontBytes / 1048576;
         pages.push(info);
+        versePages.push([pageNumber, lastVerse]);
         done += 1;
         if (done % 25 === 0 || done === pageNumbers.length) {
             console.log(`  ${done}/${pageNumbers.length} pages, ${megabytes.toFixed(1)} MB of fonts`);
         }
     });
     pages.sort((a, b) => a.page - b.page);
+
+    /* A page with no verses cannot happen; carrying the previous key forward
+     * keeps "the last verse" non-decreasing, which the app's search relies
+     * on. The pages are built several at a time, so this cannot be folded
+     * into the loop above. */
+    versePages.sort((a, b) => a[0] - b[0]);
+    let lastVerse = null;
+    for (const entry of versePages) {
+        if (entry[1]) lastVerse = entry[1];
+        else entry[1] = lastVerse;
+    }
 
     /* The ornate surah name cartouches used at the top of a surah: a ligature
      * font where the three digits of the chapter number ("018") become one
@@ -327,6 +347,14 @@ async function main() {
     const manifestName = everything ? 'index.json' : `ch${chapter}.json`;
     await writeFile(path.join(PAGE_DIR, manifestName), JSON.stringify(manifest, null, 1) + '\n', 'utf8');
     console.log(`Wrote QuranText/MushafPages/${manifestName}`);
+
+    /* Only a whole-Quran build can write the complete verse -> page index; a
+     * single chapter would overwrite it with a partial one. */
+    if (everything) {
+        await writeFile(path.join(PAGE_DIR, 'verse-pages.json'),
+            JSON.stringify({ pages: versePages }, null, 1) + '\n', 'utf8');
+        console.log('Wrote QuranText/MushafPages/verse-pages.json');
+    }
 }
 
 main().catch(error => {

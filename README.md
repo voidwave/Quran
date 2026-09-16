@@ -21,6 +21,7 @@ A free and open web app for reading and listening to the Holy Quran: full Uthman
 - 🎲 **Random ayah / random surah** — jump to a random place in the Quran with one click.
 - 🌙 **Dark & light themes** — remembered between visits.
 - 🌐 **Responsive & RTL** — built Arabic-first, works on desktop and mobile.
+- 🔗 **Two views, one place** — switching between the reader and the printed Mushaf keeps the verse you are on, and the app opens again in the view, surah, ayah and page you left it in.
 - 🚀 **Fast & static** — no build step, no backend; every file is served as-is. Tafsir/translation files are lazy-loaded only when selected.
 
 ## 📦 Data Sources & Credits
@@ -62,6 +63,7 @@ index2.html                         # Mushaf view (all 604 pages in one endless 
 index2.js                           # its logic: glyph layer, page layout, copy, lazy pages
 manifest.webmanifest                # PWA manifest (name, colours, icons)
 pwa.js                              # service worker registration + install button
+resume.js                           # shared: the view and place to come back to (localStorage)
 sw.js                               # service worker: offline caching
 icons/                              # app icons (install / home screen)
 QuranText/
@@ -76,12 +78,13 @@ QuranAudio/
 flags/                              # flag images shown next to each source
 fonts/                              # Uthmanic Hafs font
 fonts/mushaf/                       # QPC page fonts + surah name cartouches
-QuranText/MushafPages/              # per-page word data + index.json (114 chapters, 604 pages)
+QuranText/MushafPages/              # per-page word data + index.json + verse-pages.json
 tools/
   serve.js                          # local dev server
   download-tanzil-translations.ps1  # download/refresh tafsirs & translations
   build-reciter-list.ps1            # rebuild QuranAudio/reciters.json
   build-mushaf-pages.mjs            # build the Mushaf page data + page fonts
+  build-verse-pages.mjs             # verse -> page index, rebuilt from the page files (no network)
   icon.html                         # renders the PWA icons (screenshot source)
 ```
 
@@ -97,6 +100,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-reciter-list.p
 # build the Mushaf page data and page fonts (whole Quran, or one chapter)
 node tools/build-mushaf-pages.mjs all
 node tools/build-mushaf-pages.mjs 18
+
+# rebuild the verse -> page index the two views use to swap places
+# (a whole-Quran build writes it too; this one needs no network)
+node tools/build-verse-pages.mjs
 ```
 
 ---
@@ -109,7 +116,7 @@ node tools/build-mushaf-pages.mjs 18
 - The words of a printed line are spread over the full page width, so the text breaks exactly where the printed page breaks (15 lines a page, two of which a surah banner takes). The glyph size follows the sheet proportion of the print, so every page of the Quran is laid out identically.
 - The real ʿUthmānī word is kept behind every glyph: selection stops at word boundaries, and the copy handler puts the real words on the clipboard — copying gives you `ٱلْحَمْدُ لِلَّهِ ٱلَّذِىٓ أَنزَلَ`, never code points.
 - Scrolling is endless in both directions, on desktop and on mobile: pages are drawn only while they are near the viewport, so carrying the whole Quran on one scroll costs no extra memory.
-- The view switch (**القارئ / المصحف**) moves between this page and the app while keeping your place: the Mushaf opens on the page where a surah starts (`index2.html#s18`), the reader opens that surah (`index.html?surah=18`), and the reader also keeps the surah in its address bar so a reload comes back to it.
+- The view switch (**القارئ / المصحف**) moves between this page and the app around the same verse: the Mushaf opens on the page the verse is printed on and puts its line at the top, and the reader opens on the same ayah, marked with a short flash. `resume.js` remembers the view that was used last, so the installed app comes back to it — the reader on the ayah it was on, the Mushaf on its page and line — and a reload of either page comes back to the line it was left on.
 - Dark and light themes cover the pages themselves: dark paper with light ink in the dark theme (a word is a vector outline, so only the paper and the ink change) and cream paper with dark ink in the light theme; switching the theme also recolours the pages already on screen, with no redraw.
 - The app bar keeps only what reading needs — the surah picker, the page pager, the listen button and the القارئ/المصحف switch — and tucks the reciter picker, the random surah and the theme into a tools menu on small screens (on wide ones they stay inline). It also slides away by itself a couple of seconds after you stop scrolling, and returns on the next scroll, touch or hover.
 - Pressing **التلاوة** recites from the verse you have selected (or from the word whose card is open), and from the first verse of the page when nothing is selected. Every surah banner carries its own small play button that recites that surah from its first ayah. Both use the same `QuranAudio/` files and reciters as the app: the recited verse is highlighted, the view follows the recitation from page to page, each surah is opened with its basmala (surah 9 has none) and a missing file is skipped with a message, exactly like `index.js`.

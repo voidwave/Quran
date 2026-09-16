@@ -66,6 +66,16 @@ const DEFAULT_SOURCES = ['ar.jalalayn', 'en.sahih'];
 const RECITER_STORAGE_KEY = 'quran-reciter';
 const CONTINUOUS_STORAGE_KEY = 'quran-continuous';
 
+/* The shared place-memory (resume.js): the surah and ayah on screen, so both
+ * views open where the other one left off. The stub keeps the reader working
+ * if the file is missing (an old service worker shell, for example). */
+const resume = window.QuranResume
+    || { read: function () { return null; }, remember: function () { }, forget: function () { } };
+
+/* How long scrolling rests before the place is stored and the links follow. */
+const POSITION_SAVE_MS = 400;
+let positionTimer = null;
+
 /* A short breath between two ayah files. */
 const AYAH_GAP_MS = 250;
 
@@ -915,6 +925,7 @@ function initializePage() {
         SurahText.innerHTML = emptyStateHTML(); // Clear the displayed surah and ayah
         clearSearch();                          // Clear the search field and the results
         clearSurahSelection();
+        resume.forget('index');                 // Nothing to resume: the state is empty again
         window.scrollTo({ top: 0, behavior: 'smooth' });
     });
 
@@ -938,7 +949,10 @@ function initializePage() {
     var syncToTopVisibility = function () {
         toTop.hidden = window.scrollY < 700;
     };
-    window.addEventListener('scroll', syncToTopVisibility, { passive: true });
+    window.addEventListener('scroll', function () {
+        syncToTopVisibility();
+        schedulePositionSave();
+    }, { passive: true });
     syncToTopVisibility();
 }
 
@@ -1484,36 +1498,133 @@ function ViewSurah(index, scrollToTop) {
     closeSurahNav();
     closeToolsMenu();
     renderSurah(index);
-    syncViewSwitch(index);
+    schedulePositionSave();
 
     if (scrollToTop !== false) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 }
 
-/* Keeps the mushaf link and the address bar in step with the surah on screen,
- * so switching to the Mushaf view opens the page that surah starts on. */
-function syncViewSwitch(index) {
+/* ---------------------------------------------------------------------------
+ * The reader's place: the ayah at the top of the reading area follows the
+ * scroll, and the Mushaf link - and the address bar - carry it along, so the
+ * two views swap places around the same verse (resume.js keeps it stored).
+ * ------------------------------------------------------------------------ */
+
+/* The line the reading area starts at: the bottom of the sticky app bar,
+ * which the page can make taller by wrapping to two rows. */
+function readingTop() {
+    const appbar = document.querySelector('.appbar');
+    return appbar ? appbar.getBoundingClientRect().bottom : 0;
+}
+
+/* The ayah card at the top of the reading area; null when the reader is not
+ * looking at a surah (none open, or the search results fill the screen). */
+function ayahAtTop() {
+    const host = document.getElementById('maincontent');
+    const cards = host ? host.querySelectorAll('.ayah') : [];
+    if (!cards.length) return null;
+    /* The results sit above the surah, so a long list pushes the whole reading
+     * area below the fold; there is nothing to measure then. */
+    if (host.getBoundingClientRect().top > window.innerHeight) return null;
+
+    const cutoff = readingTop() + 4;
+    let current = cards[0];
+    for (const card of cards) {
+        if (card.getBoundingClientRect().top > cutoff) break;
+        current = card;
+    }
+    return current;
+}
+
+/* Stores the verse on screen and points the view switch and the address bar
+ * at it. Ayah ids are "ayah-<surah>-<ayah>", both zero based. */
+function updatePosition() {
+    if (selectedSurah === null) return;
+    const card = ayahAtTop();
+    if (!card) return;
+    const parts = card.id.split('-');
+    const surahIndex = Number(parts[1]);
+    const ayahIndex = Number(parts[2]);
+    syncViewSwitch(surahIndex, ayahIndex);
+    resume.remember('index', { surah: surahIndex + 1, ayah: ayahIndex + 1 });
+}
+
+function schedulePositionSave() {
+    if (positionTimer) clearTimeout(positionTimer);
+    positionTimer = setTimeout(updatePosition, POSITION_SAVE_MS);
+}
+
+/* Keeps the mushaf link and the address bar in step with the verse on screen,
+ * so switching to the Mushaf view opens the page the verse is printed on. */
+function syncViewSwitch(surahIndex, ayahIndex) {
+    const target = '?surah=' + (surahIndex + 1) + (ayahIndex > 0 ? '&ayah=' + (ayahIndex + 1) : '');
     const link = document.getElementById('mushaf-link');
     if (link) {
-        link.href = 'index2.html#s' + (index + 1);
+        link.href = 'index2.html' + target;
     }
     try {
-        history.replaceState(null, '', '?surah=' + (index + 1));
+        history.replaceState(null, '', target);
     } catch (error) {
         // History may be blocked (file://); the link above still works.
     }
 }
 
-/* index2.html links here as ?surah=18 so the two views stay in step. */
+/* Puts one ayah at the top of the reading area and marks it, so a view switch
+ * or an app start shows exactly where the reader landed. The jump is instant
+ * and lands the card a hair above the line the position tracker measures
+ * from, so the tracker agrees with the jump instead of reading a position
+ * that is still scrolling. */
+function jumpToAyah(surahIndex, ayahIndex) {
+    const card = document.getElementById('ayah-' + surahIndex + '-' + ayahIndex);
+    if (!card) return false;
+    const place = () => Math.max(0,
+        card.getBoundingClientRect().top + window.scrollY - readingTop() + 2);
+    window.scrollTo({ top: place(), behavior: 'instant' });
+    card.classList.add('is-flash');
+    setTimeout(function () { card.classList.remove('is-flash'); }, 1800);
+
+    /* The web fonts can settle right after the jump and move the page, so the
+     * ayah is put back once they are ready - unless the reader scrolled on. */
+    const landed = window.scrollY;
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () {
+            if (Math.abs(window.scrollY - landed) < 4) {
+                window.scrollTo({ top: place(), behavior: 'instant' });
+            }
+        });
+    }
+    return true;
+}
+
+/* index2.html links here as ?surah=18&ayah=45 so the two views stay in step.
+ * A load without a surah (the app's own start_url, a bookmark) resumes the
+ * stored place instead (see resume.js). */
 function openSurahFromUrl() {
     let requested = 0;
+    let ayah = 0;
     try {
-        requested = Number(new URLSearchParams(window.location.search).get('surah'));
+        const params = new URLSearchParams(window.location.search);
+        requested = Number(params.get('surah'));
+        ayah = Number(params.get('ayah'));
     } catch (error) {
         requested = 0;
     }
-    if (requested >= 1 && requested <= 114) {
-        ViewSurah(requested - 1, false);
+
+    if (!(requested >= 1 && requested <= 114)) {
+        const stored = resume.read();
+        if (!stored || stored.view !== 'index' || !stored.surah) return;
+        requested = stored.surah;
+        ayah = stored.ayah || 0;
     }
+    if (!(requested >= 1 && requested <= 114)) return;
+
+    ViewSurah(requested - 1, false);
+    if (ayah >= 1) {
+        jumpToAyah(requested - 1, ayah - 1);
+    }
+    /* The jump is instant, so the place is settled by now; an ayah that is not
+     * on this surah leaves the reader at the top and the links are corrected
+     * to where they really are. */
+    updatePosition();
 }

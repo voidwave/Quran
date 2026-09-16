@@ -27,6 +27,16 @@ const WORD_AUDIO_BASE = 'https://verses.quran.com/';   // word-by-word recitatio
 const RECITERS_URL = 'QuranAudio/reciters.json';       // the ayah audio folders
 const THEME_KEY = 'quran-theme';
 const RECITER_KEY = 'quran-reciter';
+const VERSES_URL = PAGE_DIR + 'verse-pages.json';   // verse -> the page it starts on
+
+/* The shared place-memory (resume.js), with a stub so a missing file (an old
+ * cached shell) cannot break the reader. */
+const resume = window.QuranResume
+    || { read: () => null, remember: () => { }, forget: () => { } };
+
+/* How long scrolling rests before the page and verse are stored. */
+const POSITION_SAVE_MS = 400;
+let positionTimer = null;
 
 /* Line pitch of the printed page: quran.com lays a 43.72px glyph on a 76.19px
  * line, i.e. 1.743. The page scales with this factor. */
@@ -84,6 +94,9 @@ const state = {
     size: 0,                 // the glyph size shared by every page
     extraHeight: 0,          // page padding + page number
     current: 1,
+    versePages: null,        // verse-pages.json: [printed page, last verse] pairs
+    pinned: null,            // { surah, ayah } the view was just opened on
+    pinnedY: 0,              // the scrollY of that landing, to notice the reader moving
     openWord: null
 };
 
@@ -516,6 +529,97 @@ function chapterOfPage(page) {
     return chapter;
 }
 
+/* The printed page a verse starts on, from verse-pages.json: the first page
+ * whose last verse is at or after it. A verse that spans a page break stays
+ * with the page it starts on, which is exactly this rule. (The recitation's
+ * pageOfVerse further down is the other direction: it finds a verse near a
+ * page that is already on screen.) */
+async function startPageOfVerse(surah, ayah) {
+    const chapter = state.chapterById.get(surah);
+    if (!chapter) return 0;
+
+    if (!state.versePages) {
+        try {
+            state.versePages = (await getJson(VERSES_URL)).pages
+                .map(([page, key]) => [page, key.split(':').map(Number)]);
+        } catch (error) {
+            console.warn('verse-pages.json could not be read; opening the surah start instead', error);
+            state.versePages = [];
+        }
+    }
+
+    const wanted = [surah, Math.min(ayah, chapter.versesCount)];
+    let low = 0;
+    let high = state.versePages.length - 1;
+    let page = 0;
+    while (low <= high) {
+        const mid = (low + high) >> 1;
+        const [s, a] = state.versePages[mid][1];
+        if (s > wanted[0] || (s === wanted[0] && a >= wanted[1])) {
+            page = state.versePages[mid][0];
+            high = mid - 1;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return page || chapter.firstPage;
+}
+
+/* The verse the reader is on: the first word of the topmost line of the page
+ * at the top of the viewport. */
+function verseAtTop() {
+    const record = state.open.get(state.current);
+    if (!record) return null;
+    const line = window.scrollY + 12;
+    for (const row of record.card.querySelectorAll('.line-row')) {
+        if (row.getBoundingClientRect().bottom + window.scrollY <= line) continue;
+        const word = row.querySelector('.word');
+        if (!word) continue;
+        const [surah, ayah] = word.dataset.loc.split(':').map(Number);
+        return { surah, ayah };
+    }
+    return null;
+}
+
+/* Stores the page - with the verse at its top - and points the reader link at
+ * that verse, so switching views opens the reader on it instead of the head
+ * of the surah. */
+function updatePosition() {
+    /* Just opened on a verse? Then that verse is the position: the top line
+     * can begin with the tail of the verse before it, and the reader link
+     * must hand back exactly the verse the other view asked for. As soon as
+     * the reader scrolls, the line at the top takes over. */
+    if (state.pinned && Math.abs(window.scrollY - state.pinnedY) >= 4) state.pinned = null;
+    const verse = state.pinned || verseAtTop();
+    if (el.readerLink) {
+        const chapter = verse ? verse.surah : chapterOfPage(state.current).id;
+        el.readerLink.href = 'index.html?surah=' + chapter + '&ayah=' + (verse ? verse.ayah : 1);
+    }
+    resume.remember('index2', {
+        page: state.current,
+        surah: verse ? verse.surah : 0,
+        ayah: verse ? verse.ayah : 0
+    });
+}
+
+function schedulePositionSave() {
+    if (positionTimer) clearTimeout(positionTimer);
+    positionTimer = setTimeout(updatePosition, POSITION_SAVE_MS);
+}
+
+/* Puts the line that holds a verse at the top of the viewport; false when the
+ * page has not been drawn yet or the verse is not printed on it. */
+function scrollToVerse(page, surah, ayah) {
+    const record = state.open.get(page);
+    if (!record) return false;
+    const word = record.card.querySelector('.word[data-loc^="' + surah + ':' + ayah + ':"]');
+    const row = word ? word.closest('.line-row') : null;
+    if (!row) return false;
+    const top = row.getBoundingClientRect().top + window.scrollY;
+    window.scrollTo({ top: Math.max(0, top - 12), behavior: 'instant' });
+    return true;
+}
+
 /* The printed page the reader is looking at: the last one at the top of the
  * viewport (the bar sits at the bottom, so it covers nothing up there). */
 function pageAtTop() {
@@ -544,15 +648,13 @@ function scrollToPage(page, smooth) {
 function setCurrent(page) {
     state.current = page;
     el.chip.textContent = toArabicDigits(page);
-    if (el.readerLink) {
-        el.readerLink.href = 'index.html?surah=' + chapterOfPage(page).id;
-    }
     if (location.hash !== '#p' + page) history.replaceState(null, '', '#p' + page);
 }
 
 function goToPage(page, smooth) {
     if (!state.pageInfo.has(page)) return;
-    openSlot(slotFor(page));
+    /* The link and the stored place follow as soon as the page is drawn. */
+    openSlot(slotFor(page)).then(() => updatePosition());
     scrollToPage(page, smooth);
     setCurrent(page);
 }
@@ -1291,8 +1393,13 @@ function wireEvents() {
         requestAnimationFrame(() => {
             scrollPending = false;
             updateChrome();
+            schedulePositionSave();
         });
     }, { passive: true });
+
+    /* The stored verse must be the one on screen the moment the link is used,
+     * so it is refreshed right before the reader follows it. */
+    el.readerLink.addEventListener('click', () => updatePosition());
 
     el.toolsToggle.addEventListener('click', () => {
         setMenu(!el.appbar.classList.contains('is-menu-open'));
@@ -1360,17 +1467,51 @@ async function init() {
     /* The reciter list only fills the toolbar; the reader does not wait for it. */
     loadReciters();
 
-    /* #p293 opens a printed page and #s18 the page where surah 18 begins; the
-     * page drawn first fixes the glyph size, and the size every page height. */
+    /* Where to open: a verse asked for by the reader view (?surah=&ayah=), a
+     * #p/#s in the address bar, or the stored place - the app comes back to
+     * the page, and the line, the reader left (see resume.js). The page drawn
+     * first fixes the glyph size, and the size every page height. */
+    const query = new URLSearchParams(location.search);
+    const askedSurah = Number(query.get('surah'));
+    const askedAyah = Number(query.get('ayah'));
     const wantedPage = pageFromHash();
     const wantedChapter = state.chapterById.get(chapterFromHash());
-    const start = state.pageInfo.has(wantedPage)
-        ? wantedPage
-        : (wantedChapter ? wantedChapter.firstPage : state.pages[0]);
+    const stored = resume.read();
+
+    let start = state.pages[0];
+    let focus = null;   // the verse to put at the top of the page
+    if (askedSurah >= 1 && askedSurah <= 114) {
+        const chapter = state.chapterById.get(askedSurah);
+        const verse = Math.max(1, Math.min(askedAyah || 1, chapter.versesCount));
+        const page = await startPageOfVerse(askedSurah, verse);
+        start = state.pageInfo.has(page) ? page : chapter.firstPage;
+        focus = { surah: askedSurah, ayah: verse };
+    } else if (state.pageInfo.has(wantedPage)) {
+        start = wantedPage;
+        /* A reload of #p293 comes back to the line the reader left, not to the
+         * page's first line. */
+        if (stored && stored.view === 'index2' && stored.page === wantedPage && stored.surah) {
+            focus = { surah: stored.surah, ayah: stored.ayah };
+        }
+    } else if (wantedChapter) {
+        start = wantedChapter.firstPage;
+    } else if (stored && stored.view === 'index2' && state.pageInfo.has(stored.page)) {
+        start = stored.page;
+        if (stored.surah) focus = { surah: stored.surah, ayah: stored.ayah };
+    }
+
     await openSlot(slotFor(start));
     refit();
-    scrollToPage(start, false);
+    if (focus && scrollToVerse(start, focus.surah, focus.ayah)) {
+        /* Hold on to the verse that was asked for: the line it is printed on
+         * can start with the words of the verse before it. */
+        state.pinned = focus;
+        state.pinnedY = window.scrollY;
+    } else {
+        scrollToPage(start, false);
+    }
     setCurrent(start);
+    updatePosition();
 
     for (const slot of state.slots) {
         loader.observe(slot);

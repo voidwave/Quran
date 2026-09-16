@@ -3,7 +3,8 @@
  *
  * The app is fully static, so after the first visit it can run offline:
  *
- *   shell   The two pages, their scripts, the manifest and the icons. Served
+ *   shell   The two pages, their scripts (including the shared resume.js that
+ *           remembers the reader's place), the manifest and the icons. Served
  *           from the cache and refreshed in the background; the pages
  *           themselves are checked against the network first (with a short
  *           deadline), so a new deploy lands immediately while an offline
@@ -22,7 +23,7 @@
  * is deleted on activate. The data/audio caches survive version bumps.
  */
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 
 const SHELL_CACHE = 'quran-shell-' + VERSION;
 const DATA_CACHE = 'quran-data';
@@ -38,6 +39,7 @@ const SHELL_FILES = [
     'index.js',
     'index2.js',
     'pwa.js',
+    'resume.js',
     'manifest.webmanifest',
     'icons/icon-192.png',
     'icons/icon-512.png',
@@ -62,6 +64,7 @@ const SHELL_SUFFIXES = [
     '/index.js',
     '/index2.js',
     '/pwa.js',
+    '/resume.js',
     '/manifest.webmanifest',
     '/icons/icon-192.png',
     '/icons/icon-512.png',
