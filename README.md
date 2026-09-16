@@ -60,6 +60,10 @@ index.html                          # the app (UI, styles, theme bootstrap)
 index.js                            # app logic: text, sources, search, audio
 index2.html                         # Mushaf view (all 604 pages in one endless scroll)
 index2.js                           # its logic: glyph layer, page layout, copy, lazy pages
+manifest.webmanifest                # PWA manifest (name, colours, icons)
+pwa.js                              # service worker registration + install button
+sw.js                               # service worker: offline caching
+icons/                              # app icons (install / home screen)
 QuranText/
   Quran/                            # Tanzil Quran text XML files
   Arabic-Tafsir/                    # Arabic tafsirs
@@ -78,6 +82,7 @@ tools/
   download-tanzil-translations.ps1  # download/refresh tafsirs & translations
   build-reciter-list.ps1            # rebuild QuranAudio/reciters.json
   build-mushaf-pages.mjs            # build the Mushaf page data + page fonts
+  icon.html                         # renders the PWA icons (screenshot source)
 ```
 
 ## 🛠️ Tools
@@ -111,6 +116,18 @@ node tools/build-mushaf-pages.mjs 18
 - A word's meaning, transliteration and recitation are one click away.
 
 `node tools/build-mushaf-pages.mjs all` fetches every printed page — its words, glyph code points, printed line numbers, real text and word audio — into `QuranText/MushafPages/` (around 93 MB of page fonts, a few minutes). Pass a chapter number instead to build just that chapter while developing. The fonts belong to the King Fahd Complex (served through quran.com) and are downloaded here for local development — check the [QUL](https://qul.tarteel.ai) licence before publishing.
+
+---
+
+## 📲 Install as an app (PWA)
+
+The site is a Progressive Web App: open it in Chrome, Edge or Safari and choose **Install** (or **Add to Home Screen**) to keep it as a standalone app with its own icon. Chromium browsers on Android and desktop also show an **تثبيت التطبيق** button in the tools menu (⋮) of both pages once the browser offers the installation.
+
+- `manifest.webmanifest` declares the app (name, colours, icons). The icons in `icons/` are rendered by `tools/icon.html` — open it in the browser and screenshot it at each size when they need to change.
+- `sw.js` caches the app shell up front, then the Quran text, Mushaf page data, fonts and recitation on demand, so whatever has been read or played once keeps working offline. Data and audio each have their own byte budget (150 MB, oldest files evicted first).
+- `pwa.js` registers the worker and adds the install button on both pages.
+
+Deploying works as usual (copy the folder): the browser picks new files up on the next visit, and a hard reload (Ctrl+Shift+R) re-fetches everything and refreshes the caches. Bump `VERSION` in `sw.js` only when its caching rules change.
 
 ---
 
@@ -174,6 +191,10 @@ index.html                          # التطبيق (الواجهة والأن�
 index.js                            # منطق التطبيق: النص والمصادر والبحث والصوت
 index2.html                         # عرض المصحف (٦٠٤ صفحات في تمرير واحد)
 index2.js                           # منطقها: طبقة الرسوم والتوزيع والنسخ والتمرير اللانهائي
+manifest.webmanifest                # ملف تعريف التطبيق (الاسم والألوان والأيقونات)
+pwa.js                              # تسجيل عامل الخدمة وزر التثبيت
+sw.js                               # عامل الخدمة: التخزين للعمل دون اتصال
+icons/                              # أيقونات التطبيق (التثبيت والشاشة الرئيسية)
 QuranText/
   Quran/                            # ملفات نص القرآن من Tanzil
   Arabic-Tafsir/                    # التفاسير العربية
@@ -192,6 +213,7 @@ tools/
   download-tanzil-translations.ps1  # تنزيل/تحديث التفاسير والترجمات
   build-reciter-list.ps1            # إعادة بناء ملف QuranAudio/reciters.json
   build-mushaf-pages.mjs            # بناء بيانات صفحات المصحف وخطوطها
+  icon.html                         # توليد أيقونات التطبيق (فتحها في المتصفح)
 ```
 
 ## 📖 عرض المصحف
@@ -209,6 +231,16 @@ tools/
 - معنى الكلمة ونقلها الصوتي وتلاوتها بضغطة واحدة.
 
 يبني الأمر `node tools/build-mushaf-pages.mjs all` كل الصفحات المطبوعة — كلماتها ورموز خطوطها وأرقام أسطرها ونصها الحقيقي وصوتها — في `QuranText/MushafPages/` (نحو ٩٣ ميغابايت من خطوط الصفحات، في بضع دقائق). ويمكن تمرير رقم سورة لبناء سورة واحدة أثناء التطوير. هذه الخطوط ملك لمجمّع الملك فهد (تُقدَّم عبر quran.com)، ونُزِّلت هنا للتجربة المحلية — فراجع رخصة [QUL](https://qul.tarteel.ai) قبل النشر.
+
+## 📲 تثبيت التطبيق (PWA)
+
+الموقع تطبيق ويب تقدّمي (PWA): افتحه في Chrome أو Edge أو Safari واختر **تثبيت** أو **إضافة إلى الشاشة الرئيسية** ليصبح تطبيقًا مستقلًا بأيقونته الخاصة. وفي متصفحات Chromium على أندرويد وسطح المكتب يظهر زر **تثبيت التطبيق** في قائمة الأدوات (⋮) في الصفحتين عند توفّر التثبيت.
+
+- `manifest.webmanifest` يعرّف التطبيق (الاسم والألوان والأيقونات)، والأيقونات في `icons/` مولَّدة من `tools/icon.html` (صفحة تُفتح في المتصفح وتُلتقط لها لقطات بأحجام مختلفة).
+- `sw.js` يخزّن هيكل التطبيق مقدمًا، ويخزّن عند الطلب نص القرآن وبيانات المصحف وخطوطه وملفات التلاوة، فيبقى ما قُرئ أو سُمع مرةً يعمل دون اتصال. ولكل نوع سقف بالبايت (١٥٠ ميغابايت للبيانات و١٥٠ للتلاوة، والأقدم يُحذف أولًا).
+- `pwa.js` يسجّل عامل الخدمة ويضيف زر التثبيت في الصفحتين.
+
+النشر كالمعتاد (نسخ المجلد)، والمتصفح يلتقط الملفات الجديدة في أول زيارة تالية، وإعادة التحميل القوية (Ctrl+Shift+R) تجلب كل شيء من الشبكة وتحدّث المخزون. وارفع `VERSION` في `sw.js` فقط عند تغيير قواعد التخزين نفسها.
 
 ## 🤲 دعاء
 

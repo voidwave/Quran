@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <title>أيقونة التطبيق — صفحة توليد الأيقونات</title>
+    <!--
+      Source page for the PWA icons.
+
+      The icon is rendered here in a real browser so the mushaf font and the
+      Arabic shaping are exactly right, then saved to PNG with a scripted
+      screenshot. Serve the folder first (node tools/serve.js) and open, e.g.:
+
+        http://localhost:8123/tools/icon.html?size=512            -> icons/icon-512.png            (rounded square)
+        http://localhost:8123/tools/icon.html?size=192            -> icons/icon-192.png            (rounded square)
+        http://localhost:8123/tools/icon.html?size=512&pad=1      -> icons/icon-maskable-512.png   (full square, safe zone)
+        http://localhost:8123/tools/icon.html?size=180&pad=1      -> icons/apple-touch-icon.png    (full square, safe zone)
+
+      pad=1 shrinks the artwork into the maskable safe zone (the inner 80%
+      circle) and fills the whole square with the background, so Android can
+      crop the icon to any shape without cutting anything off.
+    -->
+    <style>
+        @font-face {
+            font-family: 'Uthmanic';
+            src: url('../fonts/uthmanic_hafs_v22.ttf') format('truetype');
+        }
+
+        html,
+        body {
+            margin: 0;
+            background: transparent;
+            overflow: hidden;
+        }
+
+        #icon {
+            line-height: 0;
+            border-radius: 22.5%;
+            overflow: hidden;
+        }
+
+        #icon.is-square {
+            border-radius: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="icon"></div>
+
+    <script>
+        const params = new URLSearchParams(location.search);
+        const size = Number(params.get('size')) || 512;
+        const padded = params.get('pad') === '1';
+
+        /* Maskable icons keep every shape inside the safe zone: the artwork's
+         * outermost point (a frame corner) sits at 328/512 of the canvas, so
+         * 0.62 keeps it just inside the 40%-radius safe circle. */
+        const scale = padded ? 0.62 : 1;
+
+        const svg = `
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="${size}" height="${size}">
+                <defs>
+                    <radialGradient id="bg" cx="50%" cy="14%" r="130%">
+                        <stop offset="0%" stop-color="#243c32"/>
+                        <stop offset="46%" stop-color="#121e1d"/>
+                        <stop offset="100%" stop-color="#090e0f"/>
+                    </radialGradient>
+                    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#f4d98f"/>
+                        <stop offset="48%" stop-color="#e2be6a"/>
+                        <stop offset="100%" stop-color="#c39a44"/>
+                    </linearGradient>
+                    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stop-color="#e2be6a" stop-opacity="0.20"/>
+                        <stop offset="100%" stop-color="#e2be6a" stop-opacity="0"/>
+                    </radialGradient>
+                </defs>
+
+                <rect width="512" height="512" fill="url(#bg)"/>
+
+                <g transform="translate(256 256) scale(${scale}) translate(-256 -256)">
+                    <!-- Mushaf cover frame -->
+                    <rect x="24" y="24" width="464" height="464" rx="30" fill="none"
+                        stroke="url(#gold)" stroke-width="4.2" opacity="0.92"/>
+                    <rect x="38" y="38" width="436" height="436" rx="22" fill="none"
+                        stroke="url(#gold)" stroke-width="1.1" opacity="0.4"/>
+
+                    <!-- Corner nodes -->
+                    <g fill="url(#gold)" opacity="0.88">
+                        <rect x="-7" y="-7" width="14" height="14" rx="2" transform="translate(38 38) rotate(45)"/>
+                        <rect x="-7" y="-7" width="14" height="14" rx="2" transform="translate(474 38) rotate(45)"/>
+                        <rect x="-7" y="-7" width="14" height="14" rx="2" transform="translate(38 474) rotate(45)"/>
+                        <rect x="-7" y="-7" width="14" height="14" rx="2" transform="translate(474 474) rotate(45)"/>
+                    </g>
+
+                    <!-- Rub el Hizb medallion -->
+                    <circle cx="256" cy="240" r="158" fill="url(#glow)"/>
+                    <g transform="translate(256 240)" fill="none" stroke="url(#gold)" stroke-width="6.4">
+                        <rect x="-86" y="-86" width="172" height="172" rx="12"/>
+                        <rect x="-86" y="-86" width="172" height="172" rx="12" transform="rotate(45)"/>
+                        <circle r="27"/>
+                    </g>
+                    <circle cx="256" cy="240" r="7.5" fill="url(#gold)"/>
+
+                    <text x="256" y="412" text-anchor="middle" font-family="Uthmanic"
+                        font-size="58" fill="#f2ead4">القرآن الكريم</text>
+                </g>
+            </svg>`;
+
+        const icon = document.getElementById('icon');
+        icon.innerHTML = svg;
+        if (padded) {
+            icon.classList.add('is-square');
+        }
+        document.title = 'icon ' + size + (padded ? ' maskable' : '');
+    </script>
+</body>
+
+</html>
