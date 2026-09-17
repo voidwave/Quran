@@ -82,9 +82,6 @@ QuranText/
   English-Translation/              # English translations
   Translations/                     # translations in all other languages
   catalog.json                      # index of available tafsirs/translations
-QuranAudio/
-  reciters.json                     # list of reciters
-  <Reciter-Name>/                   # <sura3><ayah3>.mp3 (e.g. 002255.mp3)
 flags/                              # flag images shown next to each source
 fonts/                              # Uthmanic Hafs font
 fonts/mushaf/                       # QPC page fonts + surah name cartouches
@@ -92,11 +89,13 @@ QuranText/MushafPages/              # per-page word data + index.json + verse-pa
 tools/
   serve.js                          # local dev server
   download-tanzil-translations.ps1  # download/refresh tafsirs & translations
-  build-reciter-list.ps1            # rebuild QuranAudio/reciters.json
+  build-reciter-list.ps1            # rebuild reciters.json of the audio page (../QuranAudio)
   build-mushaf-pages.mjs            # build the Mushaf page data + page fonts
   build-verse-pages.mjs             # verse -> page index, rebuilt from the page files (no network)
   icon.html                         # renders the PWA icons (screenshot source)
 ```
+
+The recitations live on their own page next to the app — `voidwave.com/QuranAudio/` — holding `reciters.json` and one folder per reciter (`<sura3><ayah3>.mp3`, e.g. `002255.mp3`). Both views and the تنزيل download read them from `/QuranAudio/`, and `tools/serve.js` serves that folder under the same path while developing when it sits next to this project.
 
 ## 🛠️ Tools
 
@@ -104,7 +103,7 @@ tools/
 # refresh the Tanzil tafsir/translation files and the catalog
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\download-tanzil-translations.ps1
 
-# rebuild the reciters list from the QuranAudio folders
+# rebuild reciters.json of the audio page (defaults to the ../QuranAudio folder)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-reciter-list.ps1
 
 # build the Mushaf page data and page fonts (whole Quran, or one chapter)
@@ -132,7 +131,7 @@ node QuranHifz/tools/test-memorize-core.mjs
 - The view switch (**القارئ / المصحف / الحفظ**) moves between the pages around the same verse: the Mushaf opens on the page the verse is printed on and puts its line at the top, the reader opens on the same ayah, marked with a short flash, and the memorisation view keeps its own surah/ayah range. `resume.js` remembers the view that was used last, so the installed app comes back to it — the reader on the ayah it was on, the Mushaf on its page and line — and a reload of either page comes back to the line it was left on.
 - Dark and light themes cover the pages themselves: dark paper with light ink in the dark theme (a word is a vector outline, so only the paper and the ink change) and cream paper with dark ink in the light theme; switching the theme also recolours the pages already on screen, with no redraw.
 - The app bar keeps only what reading needs — the surah picker, the page pager, the listen button and the القارئ/المصحف switch — and tucks the reciter picker, the random surah and the theme into a tools menu on small screens (on wide ones they stay inline). It also slides away by itself a couple of seconds after you stop scrolling, and returns on the next scroll, touch or hover.
-- Pressing **التلاوة** recites from the verse you have selected (or from the word whose card is open), and from the first verse of the page when nothing is selected. Every surah banner carries its own small play button that recites that surah from its first ayah. Both use the same `QuranAudio/` files and reciters as the app: the recited verse is highlighted, the view follows the recitation from page to page, each surah is opened with its basmala (surah 9 has none) and a missing file is skipped with a message, exactly like `index.js`.
+- Pressing **التلاوة** recites from the verse you have selected (or from the word whose card is open), and from the first verse of the page when nothing is selected. Every surah banner carries its own small play button that recites that surah from its first ayah. Both use the same recitation files and reciters as the app (served from the `/QuranAudio/` page next to it): the recited verse is highlighted, the view follows the recitation from page to page, each surah is opened with its basmala (surah 9 has none) and a missing file is skipped with a message, exactly like `index.js`.
 - A word's meaning, transliteration and recitation are one click away.
 
 `node tools/build-mushaf-pages.mjs all` fetches every printed page — its words, glyph code points, printed line numbers, real text and word audio — into `QuranText/MushafPages/` (around 93 MB of page fonts, a few minutes). Pass a chapter number instead to build just that chapter while developing. The fonts belong to the King Fahd Complex (served through quran.com) and are downloaded here for local development — check the [QUL](https://qul.tarteel.ai) licence before publishing.
@@ -155,7 +154,7 @@ node QuranHifz/tools/test-memorize-core.mjs
 The site is a Progressive Web App: open it in Chrome, Edge or Safari and choose **Install** (or **Add to Home Screen**) to keep it as a standalone app with its own icon. Chromium browsers on Android and desktop also show an **تثبيت التطبيق** button in the tools menu (⋮) of both pages once the browser offers the installation.
 
 - `manifest.webmanifest` declares the app (name, colours, icons). The icons in `icons/` are rendered by `tools/icon.html` — open it in the browser and screenshot it at each size when they need to change.
-- `sw.js` caches the app shell up front, then the Quran text, Mushaf page data, fonts and recitation on demand, so whatever has been read or played once keeps working offline. Data and audio each have their own byte budget (150 MB, oldest files evicted first); files downloaded on purpose are pinned and never evicted.
+- `sw.js` caches the app shell up front, then the Quran text, Mushaf page data, fonts and recitation on demand, so whatever has been read or played once keeps working offline. Data and audio each have their own byte budget (150 MB, oldest files evicted first); files downloaded on purpose are pinned and never evicted. The recitations sit on their own page (`/QuranAudio/`), outside the worker's scope, so the pages themselves cache and serve them (`audio.js`) — into the same audio cache and budget.
 - `pwa.js` registers the worker and adds the install button on both pages; `offline.js` adds the تنزيل panel that fills the caches with everything the app needs, so the installed app works with no network at all. It also works in a normal tab, since both share the same caches.
 
 Deploying works as usual (copy the folder): the browser picks new files up on the next visit, and a hard reload (Ctrl+Shift+R) re-fetches everything and refreshes the caches. Bump `VERSION` in `sw.js` only when its caching rules change.
@@ -240,9 +239,6 @@ QuranText/
   English-Translation/              # الترجمات الإنجليزية
   Translations/                     # الترجمات ببقية اللغات
   catalog.json                      # فهرس التفاسير والترجمات المتاحة
-QuranAudio/
-  reciters.json                     # قائمة القرّاء
-  <اسم القارئ>/                     # <السورة><الآية>.mp3 مثل 002255.mp3
 flags/                              # صور الأعلام بجانب كل مصدر
 fonts/                              # خط عثماني حفص
 fonts/mushaf/                       # خطوط صفحات المصحف وترويسات أسماء السور
@@ -250,10 +246,12 @@ QuranText/MushafPages/              # بيانات كل صفحة (الكلمات
 tools/
   serve.js                          # خادم محلي للتطوير
   download-tanzil-translations.ps1  # تنزيل/تحديث التفاسير والترجمات
-  build-reciter-list.ps1            # إعادة بناء ملف QuranAudio/reciters.json
+  build-reciter-list.ps1            # إعادة بناء reciters.json لصفحة الصوت (مجلد ../QuranAudio)
   build-mushaf-pages.mjs            # بناء بيانات صفحات المصحف وخطوطها
   icon.html                         # توليد أيقونات التطبيق (فتحها في المتصفح)
 ```
+
+للتلاوات صفحتها الخاصة بجانب التطبيق — `voidwave.com/QuranAudio/` — وتضم `reciters.json` ومجلدًا لكل قارئ (`<السورة><الآية>.mp3` مثل `002255.mp3`). يقرؤها العرضان وزر تنزيل المحتوى من `/QuranAudio/`، ويخدمها `tools/serve.js` على المسار نفسه أثناء التطوير إذا كانت بجانب هذا المشروع.
 
 ## 📖 عرض المصحف
 
@@ -266,7 +264,7 @@ tools/
 - مفتاح التنقل (**القارئ / المصحف / الحفظ**) ينقلك بين هذه الصفحة و`index.html` مع حفظ موضعك: يفتح المصحف على أول صفحة للسورة (`index2.html#s18`)، ويفتح القارئ تلك السورة (`index.html?surah=18`)، ويحفظ القارئ السورة في شريط العنوان فيعود إليها بعد إعادة التحميل. أما صفحة الحفظ فتحفظ هي سورتها ونطاق آياتها.
 - الوضع الليلي والنهاري يشمل الصفحات نفسها: ورق داكن بحبر فاتح في الوضع الليلي (الكلمة رسم متجهي، فلا يتغير إلا الورق والحبر)، وورق كريمي بحبر داكن في الوضع النهاري؛ وتبديل الوضع يُعيد تلوين الصفحات المعروضة فورًا دون إعادة رسم.
 - شريط الأدوات لا يحمل إلا ما تحتاجه القراءة — قائمة السور، والسابق والتالي، وزر التلاوة، ومفتاح القارئ/المصحف — ويجمع اختيار القارئ والسورة العشوائية والوضع الليلي في قائمة أدوات على الشاشات الصغيرة (وتبقى ظاهرة على الشاشات الواسعة). كما يختفي الشريط وحده بعد ثوانٍ من توقّف التمرير، ويعود مع أول تمرير أو لمس أو مرور بالمؤشر.
-- زر **التلاوة** يقرأ من الآية التي حدّدتها (أو من الكلمة المفتوحة)، ومن أول آية في الصفحة إن لم يكن هناك تحديد. وفي ترويسة كل سورة زر تشغيل صغير يقرأ تلك السورة من أولها. وكلاهما بملفات `QuranAudio/` وقرّائها نفسهم: تُبرز الآية الجارية، ويتابع العرض التلاوة من صفحة إلى صفحة، وتُفتتح كل سورة ببسملتها (ولا بسملة لسورة التوبة)، ويُتخطّى الملف المفقود مع تنبيه — تمامًا كسلوك `index.js`.
+- زر **التلاوة** يقرأ من الآية التي حدّدتها (أو من الكلمة المفتوحة)، ومن أول آية في الصفحة إن لم يكن هناك تحديد. وفي ترويسة كل سورة زر تشغيل صغير يقرأ تلك السورة من أولها. وكلاهما يقرأ من صفحة التلاوات المجاورة (`/QuranAudio/`) بالقرّاء أنفسهم: تُبرز الآية الجارية، ويتابع العرض التلاوة من صفحة إلى صفحة، وتُفتتح كل سورة ببسملتها (ولا بسملة لسورة التوبة)، ويُتخطّى الملف المفقود مع تنبيه — تمامًا كسلوك `index.js`.
 - معنى الكلمة ونقلها الصوتي وتلاوتها بضغطة واحدة.
 
 يبني الأمر `node tools/build-mushaf-pages.mjs all` كل الصفحات المطبوعة — كلماتها ورموز خطوطها وأرقام أسطرها ونصها الحقيقي وصوتها — في `QuranText/MushafPages/` (نحو ٩٣ ميغابايت من خطوط الصفحات، في بضع دقائق). ويمكن تمرير رقم سورة لبناء سورة واحدة أثناء التطوير. هذه الخطوط ملك لمجمّع الملك فهد (تُقدَّم عبر quran.com)، ونُزِّلت هنا للتجربة المحلية — فراجع رخصة [QUL](https://qul.tarteel.ai) قبل النشر.
@@ -285,7 +283,7 @@ tools/
 الموقع تطبيق ويب تقدّمي (PWA): افتحه في Chrome أو Edge أو Safari واختر **تثبيت** أو **إضافة إلى الشاشة الرئيسية** ليصبح تطبيقًا مستقلًا بأيقونته الخاصة. وفي متصفحات Chromium على أندرويد وسطح المكتب يظهر زر **تثبيت التطبيق** في قائمة الأدوات (⋮) في الصفحتين عند توفّر التثبيت.
 
 - `manifest.webmanifest` يعرّف التطبيق (الاسم والألوان والأيقونات)، والأيقونات في `icons/` مولَّدة من `tools/icon.html` (صفحة تُفتح في المتصفح وتُلتقط لها لقطات بأحجام مختلفة).
-- `sw.js` يخزّن هيكل التطبيق مقدمًا، ويخزّن عند الطلب نص القرآن وبيانات المصحف وخطوطه وملفات التلاوة، فيبقى ما قُرئ أو سُمع مرةً يعمل دون اتصال. ولكل نوع سقف بالبايت (١٥٠ ميغابايت للبيانات و١٥٠ للتلاوة، والأقدم يُحذف أولًا).
+- `sw.js` يخزّن هيكل التطبيق مقدمًا، ويخزّن عند الطلب نص القرآن وبيانات المصحف وخطوطه، فيبقى ما قُرئ يعمل دون اتصال. أما ملفات التلاوة فلها صفحتها الخاصة (`/QuranAudio/`، خارج نطاق عامل الخدمة)، فتحفظها الصفحات نفسها وتقرأ منها (`audio.js`) مع السقف نفسه: ما سُمع مرةً يعمل دون اتصال، والإعادة لا تلمس الشبكة. ولكل نوع سقف بالبايت (١٥٠ ميغابايت للبيانات و١٥٠ للتلاوة، والأقدم يُحذف أولًا).
 - `pwa.js` يسجّل عامل الخدمة ويضيف زر التثبيت في الصفحتين.
 
 النشر كالمعتاد (نسخ المجلد)، والمتصفح يلتقط الملفات الجديدة في أول زيارة تالية، وإعادة التحميل القوية (Ctrl+Shift+R) تجلب كل شيء من الشبكة وتحدّث المخزون. وارفع `VERSION` في `sw.js` فقط عند تغيير قواعد التخزين نفسها.

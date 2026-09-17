@@ -14,6 +14,12 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const port = Number(process.argv[2]) || 8123;
 
+/* The recitations live on their own page of the site, next to the app
+ * (/QuranAudio/). During development the same URL is served from that folder
+ * when it sits next to this project, so the app and its تنزيل download behave
+ * exactly like the deployed pages. */
+const AUDIO_ROOT = path.resolve(root, '..', 'QuranAudio');
+
 const CONTENT_TYPES = {
     '.html': 'text/html; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
@@ -30,9 +36,12 @@ const CONTENT_TYPES = {
 
 http.createServer(function (request, response) {
     const urlPath = decodeURIComponent(request.url.split('?')[0]);
-    const filePath = path.join(root, urlPath === '/' ? 'index.html' : urlPath);
+    const underAudio = urlPath === '/QuranAudio' || urlPath.startsWith('/QuranAudio/');
+    const filePath = underAudio
+        ? path.join(AUDIO_ROOT, urlPath.slice('/QuranAudio'.length))
+        : path.join(root, urlPath === '/' ? 'index.html' : urlPath);
 
-    if (!filePath.startsWith(root)) {
+    if (!filePath.startsWith(root) && !filePath.startsWith(AUDIO_ROOT)) {
         response.writeHead(403);
         response.end('Forbidden');
         return;

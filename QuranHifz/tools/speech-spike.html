@@ -444,7 +444,7 @@
             });
 
             function loadReciters() {
-                return fetch('../../QuranAudio/reciters.json')
+                return fetch('/QuranAudio/reciters.json')
                     .then(function (response) { return response.json(); })
                     .then(function (list) {
                         els.reciter.textContent = '';
@@ -652,7 +652,7 @@
                 log('dim', 'file test: surah ' + surah + ' ayah ' + ayah);
                 loadModelIfNeeded().then(function () {
                     setFileStatus('تحميل الملف الصوتي…');
-                    var url = '../../QuranAudio/' + encodeURIComponent(reciter) + '/'
+                    var url = '/QuranAudio/' + encodeURIComponent(reciter) + '/'
                         + String(surah).padStart(3, '0') + String(ayah).padStart(3, '0') + '.mp3';
                     log('dim', 'fetching ' + url);
                     return fetch(url).then(function (response) {
@@ -805,7 +805,7 @@
                 els.compareResults.textContent = '';
                 log('dim', 'compare-all: ' + surah + ':' + ayah + ' — ' + reciter);
                 var samples = null;
-                var url = '../../QuranAudio/' + encodeURIComponent(reciter) + '/'
+                var url = '/QuranAudio/' + encodeURIComponent(reciter) + '/'
                     + String(surah).padStart(3, '0') + String(ayah).padStart(3, '0') + '.mp3';
                 setCompareStatus('تحميل الملف الصوتي…');
                 fetch(url).then(function (response) {

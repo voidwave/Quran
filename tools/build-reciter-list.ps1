@@ -1,30 +1,41 @@
 <#
 .SYNOPSIS
-    Builds QuranAudio/reciters.json from the reciter folders.
+    Builds reciters.json for the audio page (/QuranAudio/) from its reciter folders.
 
 .DESCRIPTION
-    Scans the QuranAudio folder and writes a JSON list of the reciters for the
-    picker in the app. The folder name becomes the id, and the display name is
+    The recitations have their own page of the site, next to this app: the
+    QuranAudio folder, served at /QuranAudio/. This script scans that folder
+    and writes the JSON list of the reciters for the picker in the app (and in
+    its تنزيل panel). The folder name becomes the id, and the display name is
     the folder name with "-" and "_" turned into spaces.
 
     Run this again after adding, renaming or removing reciter folders. Each
     folder is expected to hold the ayah files as <sura><ayah>.mp3 with three
     digits each, for example 002255.mp3, plus a <sura>000.mp3 basmala file.
 
+.PARAMETER Path
+    The audio folder to scan. Defaults to the QuranAudio folder next to this
+    project, which is where it sits on the domain.
+
 .EXAMPLE
     ./tools/build-reciter-list.ps1
+
+.EXAMPLE
+    ./tools/build-reciter-list.ps1 -Path D:\sites\QuranAudio
 #>
 [CmdletBinding()]
-param()
+param(
+    [string]$Path
+)
 
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
-$audioRoot = Join-Path $root 'QuranAudio'
+$audioRoot = if ($Path) { $Path } else { Join-Path (Split-Path -Parent $root) 'QuranAudio' }
 $target = Join-Path $audioRoot 'reciters.json'
 
 if (-not (Test-Path $audioRoot)) {
-    throw "The folder $audioRoot does not exist."
+    throw "The folder $audioRoot does not exist. Pass the audio folder with -Path."
 }
 
 $reciters = @(Get-ChildItem -Directory -Path $audioRoot | Sort-Object Name | ForEach-Object {

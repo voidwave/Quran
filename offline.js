@@ -13,7 +13,10 @@
  *                             in the panel (567 MB - 1.4 GB)
  *
  * The files are fetched here, a few at a time, and stored straight into the
- * two caches the service worker serves from (quran-data / quran-audio):
+ * two caches the app reads from (quran-data / quran-audio). The recitations
+ * have their own page of the site (/QuranAudio/, outside the service
+ * worker's scope), so for those files this download is what fills the cache
+ * the pages play from (see audio.js):
  *
  *   - the `x-quran-offline` header tells the worker to step aside, so it does
  *     not also keep its own, trimmable copy of a file the reader asked to
@@ -38,7 +41,10 @@
     const AUDIO_CACHE = 'quran-audio';
     const PAGE_DIR = 'QuranText/MushafPages/';
     const CATALOG_URL = 'QuranText/catalog.json';
-    const RECITERS_URL = 'QuranAudio/reciters.json';
+    /* The recitations live on their own page of the site; the list of their
+     * reciter folders is read from there (audio.js uses the same base). */
+    const AUDIO_BASE = (window.QuranAudio && window.QuranAudio.base) || '/QuranAudio/';
+    const RECITERS_URL = AUDIO_BASE + 'reciters.json';
     const RECITER_KEY = 'quran-reciter';
     const SOURCES_KEY = 'quran-sources';
 
@@ -157,7 +163,7 @@
      * are counted as done, so a partial recitation still downloads. */
     async function reciterFiles(reciterId) {
         const manifest = await getJson(PAGE_DIR + 'index.json');
-        const base = 'QuranAudio/' + encodeURIComponent(reciterId) + '/';
+        const base = AUDIO_BASE + encodeURIComponent(reciterId) + '/';
         const files = [];
         for (const chapter of manifest.chapters || []) {
             const surah = String(chapter.id).padStart(3, '0');
@@ -464,10 +470,11 @@
     }
 
     /* The reciter picker inside the panel: the one the app plays, with each
-     * folder's size when QuranAudio/reciters.json carries it. */
+     * folder's size when /QuranAudio/reciters.json carries it. */
     async function buildReciterSelect(select) {
         if (!reciters) {
-            reciters = await getJson(RECITERS_URL).catch(() => []);
+            reciters = await (window.QuranAudio ? QuranAudio.reciters() : getJson(RECITERS_URL))
+                .catch(() => []);
             if (!Array.isArray(reciters)) reciters = reciters ? [reciters] : [];
         }
         /* Filled once: a reciter picked in the panel survives reopening it. */

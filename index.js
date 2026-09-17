@@ -6,15 +6,30 @@
  *   QuranText/catalog.json                 - index of the tafsir/translation
  *                                            files that are available (built
  *                                            by tools/download-tanzil-translations.ps1)
- *   QuranAudio/reciters.json               - list of reciter folders with ayah
- *                                            audio (built by tools/build-reciter-list.ps1)
+ *   /QuranAudio/reciters.json              - list of reciter folders with ayah
+ *                                            audio (the recitations have their
+ *                                            own page of the site; see audio.js)
  * The tafsir and translation files are fetched the first time they are picked,
  * so the page does not download dozens of megabytes on start-up.
  * ------------------------------------------------------------------------ */
 const SOURCE_UTHMANI = 'QuranText/Quran/quran-uthmani.xml';
 const SOURCE_CLEAN = 'QuranText/Quran/quran-simple-clean.xml';
 const SOURCE_CATALOG = 'QuranText/catalog.json';
-const SOURCE_RECITERS = 'QuranAudio/reciters.json';
+
+/* The recitation files of the app live on their own page of the site, next
+ * to this one (/QuranAudio/), reached through the shared audio.js. The stub
+ * keeps an old cached shell (one that predates that file) from breaking the
+ * page: it plays straight from the server, without the offline copies. */
+const audioLib = window.QuranAudio || {
+    source: path => Promise.resolve(path),
+    setSource: (element, src) => { element.src = src; },
+    path: (reciterId, chapter, fileNumber) => '/QuranAudio/' + encodeURIComponent(reciterId) + '/'
+        + String(chapter).padStart(3, '0') + String(fileNumber).padStart(3, '0') + '.mp3',
+    reciters: () => fetch('/QuranAudio/reciters.json').then(response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+    })
+};
 
 /* Search results are rendered in pages so common words stay responsive.
  * A page is drawn in small chunks: the first chunk appears immediately, the
@@ -93,7 +108,10 @@ var reciters = [];         // [{ id, name }] of the audio folders
 var selectedReciterId = null;
 var audioPlayer = null;    // one shared player for the whole page
 var preloader = null;      // warms up the file that plays next
-var playback = { surah: null, ayah: null }; // what the player is on now
+var playback = { surah: null, ayah: null, path: null, hold: false }; // what the player is on now
+var startToken = 0;        // ignores a file that resolved after a newer pick
+var preloadedPath = null;  // the file the preloader is already warming
+var preloadToken = 0;
 var continuousPlay = false;
 var highlightedTrack = null; // 'surah:ayah' of the ayah that is marked now
 var nextTrackTimer = null;  // pending start of the next file
@@ -170,20 +188,16 @@ function loadCatalog() {
         });
 }
 
-/* Reads the list of reciter folders that hold the ayah audio files. */
+/* Reads the list of reciter folders that hold the ayah audio files. The
+ * files live on the audio page of the site; audioLib reads the list from
+ * there, with the copy the تنزيل download stored as the offline fallback. */
 function loadReciters() {
-    return fetch(SOURCE_RECITERS)
-        .then(function (response) {
-            if (!response.ok) {
-                throw new Error('HTTP ' + response.status);
-            }
-            return response.json();
-        })
+    return audioLib.reciters()
         .then(function (data) {
             reciters = Array.isArray(data) ? data : (data ? [data] : []);
         })
         .catch(function (error) {
-            console.warn('Could not read ' + SOURCE_RECITERS + ', recitation is off.', error);
+            console.warn('Could not read the reciter list, recitation is off.', error);
             reciters = [];
         });
 }
@@ -545,7 +559,14 @@ function playAyah(surahIndex, fileNumber) {
 function startTrack(surahIndex, fileNumber) {
     if (audioPlayer && playback.surah === surahIndex && playback.ayah === fileNumber) {
         if (audioPlayer.paused) {
-            audioPlayer.play();
+            if (audioPlayer.src) {
+                playback.hold = false;
+                audioPlayer.play();
+            } else {
+                /* Still loading: the press just re-arms or cancels the
+                 * start that is on its way. */
+                playback.hold = !playback.hold;
+            }
         } else {
             audioPlayer.pause();
         }
@@ -575,7 +596,7 @@ function startTrack(surahIndex, fileNumber) {
 
             const failed = { surah: playback.surah, ayah: playback.ayah };
             const isCurrent = playback.surah === failed.surah && playback.ayah === failed.ayah;
-            console.error('Could not load ' + audioPlayer.src, error);
+            console.error('Could not load ' + playback.path, error);
 
             // A missing basmala file should not stop the recitation.
             if (isCurrent && failed.ayah === 0 && failed.surah !== null) {
@@ -600,12 +621,27 @@ function startTrack(surahIndex, fileNumber) {
 
     playback.surah = surahIndex;
     playback.ayah = fileNumber;
-    audioPlayer.src = recitationPath(surahIndex, fileNumber);
-    audioPlayer.play().catch(function () {
-        // Real failures are reported by the error listener above.
+    playback.hold = false;
+    const path = recitationPath(surahIndex, fileNumber);
+    playback.path = path;
+
+    /* The file comes from the audio page of the site; audioLib hands back
+     * the stored copy or fetches and stores it first. A newer pick must win,
+     * so a slow fetch can never start after the reader has moved on. */
+    const token = ++startToken;
+    audioLib.source(path).then(function (src) {
+        if (token !== startToken) {
+            return;
+        }
+        audioLib.setSource(audioPlayer, src, path);
+        if (!playback.hold) {
+            audioPlayer.play().catch(function () {
+                // Real failures are reported by the error listener above.
+            });
+            preloadNextTrack();
+        }
+        updatePlaybackUI();
     });
-    updatePlaybackUI();
-    preloadNextTrack();
 }
 
 /* Where the recitation goes after this file: the next ayah, then the next surah. */
@@ -661,33 +697,35 @@ function preloadNextTrack() {
         preloader.preload = 'auto';
     }
     const path = recitationPath(next.surah, next.ayah);
-    if (!preloader.src || preloader.src.indexOf(path) === -1) {
-        preloader.src = path;
+    if (preloadedPath === path) {
+        return;
     }
+    preloadedPath = path;
+    const token = ++preloadToken;
+    audioLib.source(path).then(function (src) {
+        if (token !== preloadToken) {
+            return;
+        }
+        audioLib.setSource(preloader, src, path);
+    });
 }
 
 function stopPlayback() {
     cancelScheduledTrack();
+    startToken += 1;   // a file still being fetched must not start now
     if (audioPlayer) {
         audioPlayer.pause();
     }
     playback.surah = null;
     playback.ayah = null;
+    playback.path = null;
     updatePlaybackUI();
 }
 
-/* 002255.mp3 = sura 2, ayah 255; 002000.mp3 = the basmala of sura 2. */
+/* 002255.mp3 = sura 2, ayah 255; 002000.mp3 = the basmala of sura 2. The
+ * files sit on the audio page of the site (/QuranAudio/). */
 function recitationPath(surahIndex, fileNumber) {
-    return 'QuranAudio/' + encodeURIComponent(selectedReciterId) + '/'
-        + padNumber(surahIndex + 1) + padNumber(fileNumber) + '.mp3';
-}
-
-function padNumber(value) {
-    let text = String(value);
-    while (text.length < 3) {
-        text = '0' + text;
-    }
-    return text;
+    return audioLib.path(selectedReciterId, surahIndex + 1, fileNumber);
 }
 
 /* Keeps every play button and the highlighted file in sync with the player. */

@@ -11,9 +11,10 @@
  *           reader still opens without waiting.
  *   data    The Quran text, the mushaf page data and the fonts. Captured on
  *           demand and kept under a byte budget, oldest files evicted first.
- *   audio   The recitation files. Captured the first time a file is played,
- *           under their own byte budget: repeated listening stops hitting the
- *           network, and what has been played once works offline.
+ *   audio   The recitation files. They live on the audio page of the site
+ *           (/QuranAudio/, outside this worker's scope), so the pages cache
+ *           and serve them themselves (audio.js) under the same byte budget
+ *           — the audio-stored messages below keep that budget counting.
  *   fonts   The Google fonts the pages link (best effort, tiny cache).
  *
  * The reader can also download whole sections for offline use (see
@@ -28,7 +29,7 @@
  * is deleted on activate. The data/audio caches survive version bumps.
  */
 
-const VERSION = 'v8';
+const VERSION = 'v9';
 
 const SHELL_CACHE = 'quran-shell-' + VERSION;
 const DATA_CACHE = 'quran-data';
@@ -46,6 +47,7 @@ const SHELL_FILES = [
     'index2.js',
     'pwa.js',
     'resume.js',
+    'audio.js',
     'offline.js',
     'QuranHifz/memorize.html',
     'QuranHifz/memorize.js',
@@ -79,6 +81,7 @@ const SHELL_SUFFIXES = [
     '/index2.js',
     '/pwa.js',
     '/resume.js',
+    '/audio.js',
     '/offline.js',
     '/QuranHifz/memorize.html',
     '/QuranHifz/memorize.js',
@@ -278,7 +281,11 @@ async function fetchAndStore(cacheName, request) {
 
 /* --------------------------------------------------------------------------
    Recitation audio
-   -------------------------------------------------------------------------- */
+   The live audio page (/QuranAudio/) lies outside this worker's scope, so
+   those requests never reach this handler; the pages cache and serve those
+   files themselves (audio.js, reporting through the audio-stored messages).
+   This path still serves any audio that does land in scope — an old cached
+   URL, a local copy under the app folder.   -------------------------------------------------------------------------- */
 
 async function audioResponse(request) {
     const key = cleanUrl(request.url);
@@ -420,5 +427,12 @@ self.addEventListener('message', event => {
             if (!entries) return;
             for (const [key] of message.files) delete entries[key];
         }));
+    } else if (message.type === 'audio-stored') {
+        /* Recitation files the pages cached themselves (the audio page lies
+         * outside this worker's scope, see audio.js): booked like this
+         * worker's own captures, so the byte budget above still trims the
+         * oldest listening first. */
+        event.waitUntil(Promise.all(message.files.map(
+            ([key, bytes]) => noteStored(AUDIO_CACHE, key, bytes))));
     }
 });

@@ -24,7 +24,6 @@
 const PAGE_DIR = 'QuranText/MushafPages/';
 const MANIFEST_URL = PAGE_DIR + 'index.json';
 const WORD_AUDIO_BASE = 'https://verses.quran.com/';   // word-by-word recitation
-const RECITERS_URL = 'QuranAudio/reciters.json';       // the ayah audio folders
 const THEME_KEY = 'quran-theme';
 const RECITER_KEY = 'quran-reciter';
 const VERSES_URL = PAGE_DIR + 'verse-pages.json';   // verse -> the page it starts on
@@ -33,6 +32,21 @@ const VERSES_URL = PAGE_DIR + 'verse-pages.json';   // verse -> the page it star
  * cached shell) cannot break the reader. */
 const resume = window.QuranResume
     || { read: () => null, remember: () => { }, forget: () => { } };
+
+/* The recitation files of the app live on their own page of the site, next
+ * to this one (/QuranAudio/), reached through the shared audio.js. The stub
+ * keeps an old cached shell (one that predates that file) from breaking the
+ * page: it plays straight from the server, without the offline copies. */
+const audioLib = window.QuranAudio || {
+    source: path => Promise.resolve(path),
+    setSource: (element, src) => { element.src = src; },
+    path: (reciterId, chapter, fileNumber) => '/QuranAudio/' + encodeURIComponent(reciterId) + '/'
+        + String(chapter).padStart(3, '0') + String(fileNumber).padStart(3, '0') + '.mp3',
+    reciters: () => fetch('/QuranAudio/reciters.json').then(response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+    })
+};
 
 /* How long scrolling rests before the page and verse are stored. */
 const POSITION_SAVE_MS = 400;
@@ -81,7 +95,7 @@ const state = {
     manifest: null,
     chapters: [],
     chapterById: new Map(),  // chapter number -> { versesCount, firstPage, ... }
-    reciters: [],            // the recitation folders of QuranAudio/
+    reciters: [],            // the recitation folders of /QuranAudio/
     reciterId: '',
     pages: [],               // page numbers, ascending
     pageInfo: new Map(),     // page number -> { slots, font, fontBytes }
@@ -759,14 +773,11 @@ function playWord(word) {
  * pauses and resumes instead of restarting. */
 function playAyah(key) {
     if (!state.reciterId) {
-        showToast('لا توجد ملفات تلاوة — تأكّد من QuranAudio/reciters.json.');
+        showToast('لا توجد ملفات تلاوة — تأكّد من /QuranAudio/reciters.json.');
         return;
     }
     if (recitation.key === key) {
-        const audio = recitationAudio();
-        if (audio.paused) audio.play().catch(() => { });
-        else audio.pause();
-        syncListenButton();
+        toggleAudio();
         return;
     }
     startRecitation(key);
@@ -833,12 +844,15 @@ function closePopover() {
 
 /* ---------------------------------------------------------------------------
  * Recitation — the ayah audio of the app, the same files index.js plays:
- * QuranAudio/<reciter>/<sura><ayah>.mp3, <sura>000.mp3 being the basmala.
+ * /QuranAudio/<reciter>/<sura><ayah>.mp3, <sura>000.mp3 being the basmala.
  * ------------------------------------------------------------------------ */
 const recitation = {
     audio: null,
     key: null,          // the verse being recited, "18:5"
     basmala: false,     // the file playing is the basmala that opens a surah
+    path: null,         // the file behind the verse/basmala being played
+    hold: false,        // a press while loading cancels the auto-play
+    token: 0,           // ignores a file that resolved after a newer pick
     page: 0,            // the printed page the verse is on
     timer: null
 };
@@ -849,8 +863,7 @@ function padNumber(value) {
 }
 
 function recitationPath(chapter, verse) {
-    return 'QuranAudio/' + encodeURIComponent(state.reciterId) + '/'
-        + padNumber(chapter) + padNumber(verse) + '.mp3';
+    return audioLib.path(state.reciterId, chapter, verse);
 }
 
 /* The verse that follows this one, or null at the end of the Quran. */
@@ -957,14 +970,45 @@ function recitationAudio() {
     return recitation.audio;
 }
 
+/* Plays or pauses the recitation element. A press while the file is still
+ * loading re-arms or cancels the start that is on its way; on a loaded
+ * player it resumes the pause. */
+function toggleAudio() {
+    const audio = recitationAudio();
+    if (audio.paused) {
+        if (audio.src) {
+            recitation.hold = false;
+            audio.play().catch(() => { });
+        } else {
+            recitation.hold = !recitation.hold;
+        }
+    } else {
+        audio.pause();
+    }
+    syncListenButton();
+}
+
 /* Plays one file: the verse itself, or the basmala that opens its surah. */
 function playFile(key, basmala) {
     const [chapter, verse] = key.split(':').map(Number);
     recitation.key = key;
     recitation.basmala = Boolean(basmala);
+    recitation.hold = false;
     const audio = recitationAudio();
-    audio.src = recitationPath(chapter, basmala ? 0 : verse);
-    audio.play().catch(() => { /* real failures come through the error event */ });
+    const path = recitationPath(chapter, basmala ? 0 : verse);
+    recitation.path = path;
+
+    /* The file comes from the audio page of the site; audioLib hands back
+     * the stored copy or fetches and stores it first. A newer pick must win,
+     * so a slow fetch can never start after the reader has moved on. */
+    const token = ++recitation.token;
+    audioLib.source(path).then(src => {
+        if (token !== recitation.token) return;
+        audioLib.setSource(audio, src, path);
+        if (!recitation.hold) {
+            audio.play().catch(() => { /* real failures come through the error event */ });
+        }
+    });
     markPlaying(key);
     syncListenButton();
 }
@@ -1007,7 +1051,7 @@ function advanceRecitation() {
 function handleRecitationError() {
     const error = recitation.audio ? recitation.audio.error : null;
     if (!error || error.code === 1 || !recitation.key) return;   // 1 = aborted
-    console.warn('Could not load ' + (recitation.audio ? recitation.audio.src : ''), error);
+    console.warn('Could not load ' + (recitation.path || ''), error);
 
     /* A missing basmala should not stop the recitation. */
     if (recitation.basmala) {
@@ -1024,6 +1068,8 @@ function handleRecitationError() {
 function stopRecitation() {
     clearTimeout(recitation.timer);
     recitation.timer = null;
+    recitation.token += 1;   // a file still being fetched must not start now
+    recitation.hold = false;
     if (recitation.audio) recitation.audio.pause();
     recitation.key = null;
     recitation.basmala = false;
@@ -1042,7 +1088,7 @@ async function startRecitation(key) {
 /* Recites a whole surah: its basmala first, like the app does. */
 function playSurah(chapter) {
     if (!state.reciterId) {
-        showToast('لا توجد ملفات تلاوة — تأكّد من QuranAudio/reciters.json.');
+        showToast('لا توجد ملفات تلاوة — تأكّد من /QuranAudio/reciters.json.');
         return;
     }
     const info = state.chapterById.get(chapter);
@@ -1050,10 +1096,7 @@ function playSurah(chapter) {
 
     /* The surah being recited: its own button pauses or resumes. */
     if (recitation.key && Number(recitation.key.split(':')[0]) === chapter) {
-        const audio = recitationAudio();
-        if (audio.paused) audio.play().catch(() => { });
-        else audio.pause();
-        syncListenButton();
+        toggleAudio();
         return;
     }
 
@@ -1064,7 +1107,7 @@ function playSurah(chapter) {
 
 function toggleRecitation() {
     if (!state.reciterId) {
-        showToast('لا توجد ملفات تلاوة — تأكّد من QuranAudio/reciters.json.');
+        showToast('لا توجد ملفات تلاوة — تأكّد من /QuranAudio/reciters.json.');
         return;
     }
 
@@ -1080,19 +1123,16 @@ function toggleRecitation() {
         return;
     }
 
-    const audio = recitationAudio();
-    if (audio.paused) audio.play().catch(() => { });
-    else audio.pause();
-    syncListenButton();
+    toggleAudio();
 }
 
-/* The reciters of QuranAudio/reciters.json; the choice is remembered. */
+/* The reciters of /QuranAudio/reciters.json; the choice is remembered. */
 async function loadReciters() {
     try {
-        const data = await getJson(RECITERS_URL);
+        const data = await audioLib.reciters();
         state.reciters = Array.isArray(data) ? data : (data ? [data] : []);
     } catch (error) {
-        console.warn('Could not read ' + RECITERS_URL, error);
+        console.warn('Could not read the reciter list', error);
         state.reciters = [];
     }
 
