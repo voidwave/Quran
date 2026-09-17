@@ -28,9 +28,14 @@ if (-not (Test-Path $audioRoot)) {
 }
 
 $reciters = @(Get-ChildItem -Directory -Path $audioRoot | Sort-Object Name | ForEach-Object {
+    # The file count and the total size let the app say how big a download of
+    # that reciter is before it starts (see offline.js).
+    $files = @(Get-ChildItem -File -Path $_.FullName)
     [pscustomobject]@{
-        id   = $_.Name
-        name = ($_.Name -replace '[-_]+', ' ').Trim()
+        id    = $_.Name
+        name  = ($_.Name -replace '[-_]+', ' ').Trim()
+        files = $files.Count
+        bytes = ($files | Measure-Object -Property Length -Sum).Sum
     }
 })
 

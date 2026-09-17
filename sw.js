@@ -16,6 +16,11 @@
  *           network, and what has been played once works offline.
  *   fonts   The Google fonts the pages link (best effort, tiny cache).
  *
+ * The reader can also download whole sections for offline use (see
+ * offline.js): those files are fetched and stored by the page itself and are
+ * pinned in the ledger here, so the byte budgets below and their oldest-first
+ * eviction only ever touch what this worker cached by itself.
+ *
  * A hard reload (Ctrl+Shift+R) sends every request to the network and
  * refreshes the cached copy, so it is also the way to pick up a data rebuild.
  *
@@ -23,7 +28,7 @@
  * is deleted on activate. The data/audio caches survive version bumps.
  */
 
-const VERSION = 'v2';
+const VERSION = 'v3';
 
 const SHELL_CACHE = 'quran-shell-' + VERSION;
 const DATA_CACHE = 'quran-data';
@@ -40,6 +45,7 @@ const SHELL_FILES = [
     'index2.js',
     'pwa.js',
     'resume.js',
+    'offline.js',
     'manifest.webmanifest',
     'icons/icon-192.png',
     'icons/icon-512.png',
@@ -65,6 +71,7 @@ const SHELL_SUFFIXES = [
     '/index2.js',
     '/pwa.js',
     '/resume.js',
+    '/offline.js',
     '/manifest.webmanifest',
     '/icons/icon-192.png',
     '/icons/icon-512.png',
@@ -139,6 +146,11 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
     const request = event.request;
     if (request.method !== 'GET') return;
+
+    /* A file the reader is downloading for offline use (offline.js): the page
+     * stores it itself and pins it, so this worker must not also keep its own,
+     * trimmable copy under the same key. */
+    if (request.headers.get('x-quran-offline')) return;
 
     const url = new URL(request.url);
     if (url.origin !== self.location.origin) {
@@ -315,15 +327,24 @@ function noteStored(cacheName, key, bytes) {
 
     return withLedger(async ledger => {
         const entries = ledger[cacheName] || (ledger[cacheName] = {});
+        /* A file the reader downloaded stays pinned even when a refresh stores
+         * a fresh copy of it under the same key. */
+        const pinned = entries[key] && entries[key].p;
         entries[key] = { s: bytes, t: Date.now() };
+        if (pinned) entries[key].p = 1;
 
         let total = 0;
-        for (const entry of Object.values(entries)) total += entry.s;
+        for (const entry of Object.values(entries)) {
+            if (!entry.p) total += entry.s;
+        }
         if (total <= budget) return;
 
-        /* Oldest first, until the cache fits its budget again. */
+        /* Oldest first, until the cache fits its budget again; pinned files
+         * (the reader's own downloads) are never evicted. */
         const cache = await caches.open(cacheName);
-        const oldest = Object.entries(entries).sort((a, b) => a[1].t - b[1].t);
+        const oldest = Object.entries(entries)
+            .filter(entry => !entry[1].p)
+            .sort((a, b) => a[1].t - b[1].t);
         for (const [url, entry] of oldest) {
             if (total <= budget) break;
             await cache.delete(url);
@@ -333,3 +354,43 @@ function noteStored(cacheName, key, bytes) {
         console.log('[sw] ' + cacheName + ' trimmed to ' + Math.round(total / 1048576) + ' MB');
     });
 }
+
+/* --------------------------------------------------------------------------
+   The reader's own downloads (see offline.js)
+
+   The page fetches those files itself - marked with the x-quran-offline header
+   the fetch handler steps aside for - and stores them in the data/audio
+   caches. Here they are written into the ledger as pinned, so the budgets
+   above never evict them, and unpinned again when the reader deletes them.
+   The keys are absolute URLs without a query string, the same keys this worker
+   stores under.
+   ----------------------------------------------------------------------- */
+
+self.addEventListener('message', event => {
+    const message = event.data;
+    if (!message || !Array.isArray(message.files) || !BUDGETS[message.cache]) return;
+
+    if (message.type === 'offline-stored') {
+        event.waitUntil(withLedger(ledger => {
+            const entries = ledger[message.cache] || (ledger[message.cache] = {});
+            for (const [key, bytes] of message.files) {
+                entries[key] = { s: bytes, t: Date.now(), p: 1 };
+            }
+        }));
+    } else if (message.type === 'offline-keep') {
+        event.waitUntil(withLedger(ledger => {
+            const entries = ledger[message.cache] || (ledger[message.cache] = {});
+            for (const [key] of message.files) {
+                /* Already stored when the download was started: keep the size
+                 * this worker measured, only make sure it is pinned. */
+                entries[key] = Object.assign({ s: 0, t: Date.now() }, entries[key], { p: 1 });
+            }
+        }));
+    } else if (message.type === 'offline-delete') {
+        event.waitUntil(withLedger(ledger => {
+            const entries = ledger[message.cache];
+            if (!entries) return;
+            for (const [key] of message.files) delete entries[key];
+        }));
+    }
+});

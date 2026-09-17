@@ -22,6 +22,7 @@ A free and open web app for reading and listening to the Holy Quran: full Uthman
 - 🌙 **Dark & light themes** — remembered between visits.
 - 🌐 **Responsive & RTL** — built Arabic-first, works on desktop and mobile.
 - 🔗 **Two views, one place** — switching between the reader and the printed Mushaf keeps the verse you are on, and the app opens again in the view, surah, ayah and page you left it in.
+- ⬇️ **Download for offline use** — the تنزيل button in the tools menu saves the whole content (the six text files, the tafsirs, all 604 Mushaf pages with their fonts — about 124 MB) or one reciter's full recitation (567 MB – 1.4 GB). Downloads can be stopped and resumed, and deleted again to give the space back.
 - 🚀 **Fast & static** — no build step, no backend; every file is served as-is. Tafsir/translation files are lazy-loaded only when selected.
 
 ## 📦 Data Sources & Credits
@@ -64,6 +65,7 @@ index2.js                           # its logic: glyph layer, page layout, copy,
 manifest.webmanifest                # PWA manifest (name, colours, icons)
 pwa.js                              # service worker registration + install button
 resume.js                           # shared: the view and place to come back to (localStorage)
+offline.js                          # shared: downloads the content / one reciter for offline use
 sw.js                               # service worker: offline caching
 icons/                              # app icons (install / home screen)
 QuranText/
@@ -131,8 +133,8 @@ node tools/build-verse-pages.mjs
 The site is a Progressive Web App: open it in Chrome, Edge or Safari and choose **Install** (or **Add to Home Screen**) to keep it as a standalone app with its own icon. Chromium browsers on Android and desktop also show an **تثبيت التطبيق** button in the tools menu (⋮) of both pages once the browser offers the installation.
 
 - `manifest.webmanifest` declares the app (name, colours, icons). The icons in `icons/` are rendered by `tools/icon.html` — open it in the browser and screenshot it at each size when they need to change.
-- `sw.js` caches the app shell up front, then the Quran text, Mushaf page data, fonts and recitation on demand, so whatever has been read or played once keeps working offline. Data and audio each have their own byte budget (150 MB, oldest files evicted first).
-- `pwa.js` registers the worker and adds the install button on both pages.
+- `sw.js` caches the app shell up front, then the Quran text, Mushaf page data, fonts and recitation on demand, so whatever has been read or played once keeps working offline. Data and audio each have their own byte budget (150 MB, oldest files evicted first); files downloaded on purpose are pinned and never evicted.
+- `pwa.js` registers the worker and adds the install button on both pages; `offline.js` adds the تنزيل panel that fills the caches with everything the app needs, so the installed app works with no network at all. It also works in a normal tab, since both share the same caches.
 
 Deploying works as usual (copy the folder): the browser picks new files up on the next visit, and a hard reload (Ctrl+Shift+R) re-fetches everything and refreshes the caches. Bump `VERSION` in `sw.js` only when its caching rules change.
 
