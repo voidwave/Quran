@@ -987,6 +987,13 @@
         });
     }
 
+    /* The tools menu of the bar (⋮ on small screens): the view switch and the
+       theme live inside it there; on wide bars they stay inline. */
+    function setMenu(open) {
+        els.appbar.classList.toggle('is-menu-open', open);
+        els.toolsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
     function wireUI() {
         els.micToggle.addEventListener('click', function () {
             if (running) {
@@ -1071,6 +1078,24 @@
             els.themeToggle.setAttribute('aria-label',
                 next === 'light' ? 'Switch to dark mode' : 'Switch to light mode');
         });
+
+        /* The tools menu (⋮): opened by its button, closed by anything else. */
+        els.toolsToggle.addEventListener('click', function () {
+            setMenu(!els.appbar.classList.contains('is-menu-open'));
+        });
+        document.addEventListener('click', function (event) {
+            if (els.appbar.classList.contains('is-menu-open')
+                && !event.target.closest('#appbar-tools')
+                && !event.target.closest('#tools-toggle')) {
+                setMenu(false);
+            }
+        });
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && els.appbar.classList.contains('is-menu-open')) {
+                setMenu(false);
+                els.toolsToggle.focus();
+            }
+        });
     }
 
     function syncSettingsUI() {
@@ -1103,6 +1128,8 @@
             toInput: document.getElementById('to-input'),
             applyButton: document.getElementById('apply-button'),
             themeToggle: document.getElementById('theme-toggle'),
+            appbar: document.getElementById('button-container'),
+            toolsToggle: document.getElementById('tools-toggle'),
             supportNotice: document.getElementById('mic-support-notice'),
             strictnessSelect: document.getElementById('strictness-select'),
             hideModeSelect: document.getElementById('hide-mode-select'),

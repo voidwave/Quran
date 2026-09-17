@@ -352,6 +352,28 @@
             align-items: center;
         }
 
+        /* The view switch and the theme: inline on wide bars, inside the
+           tools menu on small ones (see the media query). display: contents
+           keeps them as direct items of the bar on wide screens. */
+        .appbar__tools {
+            display: contents;
+        }
+
+        /* Only small screens need the menu button; wide ones show the tools. */
+        #tools-toggle {
+            display: none;
+        }
+
+        /* The theme label is only shown inside the menu panel. */
+        #theme-toggle .btn__label {
+            display: none;
+        }
+
+        /* On wide bars the theme sits at the far end of the row. */
+        #theme-toggle {
+            order: 1;
+        }
+
         .view-switch {
             display: inline-flex;
             align-items: center;
@@ -747,7 +769,10 @@
         }
 
         .mic-status {
-            flex: 1 1 auto;
+            /* Basis 0 (not auto): the wrap decision must not see the text
+               width, or a long message would drop the whole status block to
+               its own row and make the bar taller. The text ellipsizes. */
+            flex: 1 1 0%;
             min-width: 0;
         }
 
@@ -948,40 +973,155 @@
         ------------------------------------------------------------------ */
         @media (max-width: 700px) {
             .appbar__inner {
+                gap: 6px;
+                padding: 6px 0;
+            }
+
+            .view-switch__option {
+                min-height: 34px;
+                padding: 4px 10px;
+                font-size: 0.86rem;
+            }
+
+            .appbar .btn {
+                min-height: 34px;
+                padding: 4px 7px;
+                font-size: 0.86rem;
+            }
+
+            /* The tools menu button and its panel: the view switch and the
+               theme move in, so the bar keeps a single row. */
+            #tools-toggle {
+                display: inline-flex;
+            }
+
+            .appbar__tools {
+                position: absolute;
+                top: 100%;
+                inset-inline: 0;
+                display: none;
+                flex-direction: column;
+                align-items: stretch;
                 gap: 8px;
+                padding: 12px;
+                background: var(--surface);
+                border-bottom: 1px solid var(--border);
+                box-shadow: var(--shadow);
             }
 
-            .range-controls {
-                order: 3;
+            .appbar.is-menu-open .appbar__tools {
+                display: flex;
+            }
+
+            .appbar__tools .view-switch {
                 width: 100%;
-                gap: 6px 10px;
             }
 
-            .select {
-                max-width: 9.5rem;
+            .appbar__tools .view-switch__option {
+                flex: 1 1 0;
+                justify-content: center;
             }
 
-            .num-input {
-                width: 3.6rem;
+            .appbar__tools .btn {
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .appbar__tools #theme-toggle .btn__label {
+                display: inline;
+            }
+
+            /* The range row never wraps: basis 0 keeps the wrap decision from
+               seeing the controls' width, then the surah select shrinks
+               inside (its text clips), so the bar keeps one row on any phone
+               and whatever font has loaded. */
+            .range-controls {
+                flex: 1 1 0%;
+                min-width: 0;
+                flex-wrap: nowrap;
+                gap: 3px 4px;
+            }
+
+            .field {
+                gap: 2px;
+                min-width: 0;
             }
 
             .field__label {
-                font-size: 0.8rem;
+                flex: 0 0 auto;
+                font-size: 0.64rem;
+            }
+
+            .select,
+            .num-input {
+                min-height: 34px;
+                padding: 4px 8px;
+                font-size: 0.86rem;
+            }
+
+            .select-wrap {
+                flex: 0 1 auto;
+                min-width: 0;
+                overflow: hidden;
+            }
+
+            .select {
+                width: 100%;
+                min-width: 0;
+                max-width: 6rem;
+                padding-inline-end: 18px;
+            }
+
+            .num-input {
+                flex: 0 0 auto;
+                width: 2.15rem;
             }
 
             #maincontent {
                 width: calc(100% - 20px);
-                margin-bottom: 190px;
+                margin-bottom: 130px;
             }
 
             .ayah {
-                scroll-margin-top: 210px;
+                scroll-margin-top: 90px;
             }
 
             .mic-bar__inner {
                 flex-wrap: wrap;
-                gap: 8px 12px;
-                padding: 8px 0;
+                gap: 6px 10px;
+                padding: 6px 0;
+            }
+
+            .mic-button {
+                width: 46px;
+                height: 46px;
+            }
+
+            .mic-button svg {
+                width: 20px;
+                height: 20px;
+            }
+
+            .mic-status__text {
+                margin-bottom: 3px;
+                font-size: 0.9rem;
+            }
+
+            /* The heard line keeps its place even while empty (same height
+               visible or hidden), so a session never changes the bar
+               height. */
+            .mic-status__heard {
+                margin-bottom: 3px;
+                font-size: 0.78rem;
+                line-height: 1.35;
+                min-height: 1.35em;
+            }
+
+            /* (the page-wide `[hidden] { display: none !important }` is
+               beaten on specificity here, so the line keeps its space) */
+            .mic-status__heard[hidden] {
+                display: block !important;
+                visibility: hidden;
             }
 
             .mic-actions {
@@ -993,11 +1133,15 @@
             .mic-actions .btn {
                 flex: 1 1 auto;
                 justify-content: center;
+                min-height: 32px;
+                padding: 4px 10px;
+                font-size: 0.86rem;
             }
 
             .settings-panel {
                 inset-inline: 12px;
                 width: auto;
+                bottom: calc(112px + env(safe-area-inset-bottom));
             }
         }
 
@@ -1013,12 +1157,30 @@
 <body>
     <header id="button-container" class="appbar">
         <div class="appbar__inner">
-            <div class="view-switch" role="group" aria-label="التنقل بين القارئ والمصحف والحفظ">
-                <a class="view-switch__option" id="reader-link" href="../index.html"
-                    title="فتح القارئ: النص العثماني مع التفاسير والترجمات والبحث">القارئ</a>
-                <a class="view-switch__option" id="mushaf-link" href="../index2.html"
-                    title="فتح المصحف: الصفحات المطبوعة، كل كلمة فيها رسم متجهي">المصحف</a>
-                <span class="view-switch__option is-active" aria-current="page">الحفظ</span>
+            <div class="appbar__tools" id="appbar-tools">
+                <div class="view-switch" role="group" aria-label="التنقل بين القارئ والمصحف والحفظ">
+                    <a class="view-switch__option" id="reader-link" href="../index.html"
+                        title="فتح القارئ: النص العثماني مع التفاسير والترجمات والبحث">القارئ</a>
+                    <a class="view-switch__option" id="mushaf-link" href="../index2.html"
+                        title="فتح المصحف: الصفحات المطبوعة، كل كلمة فيها رسم متجهي">المصحف</a>
+                    <span class="view-switch__option is-active" aria-current="page">الحفظ</span>
+                </div>
+
+                <button id="theme-toggle" class="btn" type="button" aria-label="Switch to light mode"
+                    title="تفعيل الوضع النهاري">
+                    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>
+                    </svg>
+                    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="4"></circle>
+                        <path
+                            d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5">
+                        </path>
+                    </svg>
+                    <span class="btn__label">الوضع</span>
+                </button>
             </div>
 
             <div class="range-controls">
@@ -1043,20 +1205,12 @@
                 <button id="apply-button" class="btn" type="button" disabled>عرض</button>
             </div>
 
-            <button id="theme-toggle" class="btn" type="button" aria-label="Switch to light mode"
-                title="تفعيل الوضع النهاري">
-                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>
+            <button id="tools-toggle" class="btn" type="button" aria-label="أدوات أخرى" aria-expanded="false"
+                aria-controls="appbar-tools" title="أدوات أخرى">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    aria-hidden="true">
+                    <path d="M12 5h.01M12 12h.01M12 19h.01"></path>
                 </svg>
-                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <circle cx="12" cy="12" r="4"></circle>
-                    <path
-                        d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5">
-                    </path>
-                </svg>
-                <span class="sr-only">THEME</span>
             </button>
         </div>
     </header>
