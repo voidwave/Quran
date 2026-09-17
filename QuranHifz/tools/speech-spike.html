@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Speech spike — قياس دقة التعرّف المحلي على التلاوة</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0a0f10;
+            --surface: #111a1b;
+            --surface-2: #16211f;
+            --surface-3: #1e2b29;
+            --border: rgba(255, 255, 255, 0.1);
+            --text: #edf3f1;
+            --muted: #8b9a96;
+            --accent: #e2be6a;
+            --good: #7fc79a;
+            --warn: #e2be6a;
+            --bad: #e07f7f;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 18px 14px 60px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, "Segoe UI", Tahoma, sans-serif;
+            line-height: 1.7;
+        }
+
+        h1 {
+            font-size: 1.3rem;
+            margin: 0 0 4px;
+        }
+
+        h2 {
+            font-size: 1.05rem;
+            margin: 22px 0 8px;
+            color: var(--accent);
+        }
+
+        p.note {
+            margin: 0 0 16px;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        label {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        input,
+        select,
+        textarea,
+        button {
+            font: inherit;
+            color: inherit;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 7px 10px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 70px;
+            font-family: "Traditional Arabic", "Noto Naskh Arabic", serif;
+            font-size: 1.15rem;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: var(--surface-3);
+        }
+
+        button.primary {
+            background: var(--accent);
+            color: #1b1508;
+            border-color: transparent;
+            font-weight: 700;
+        }
+
+        button.recording {
+            background: var(--bad);
+            color: #fff;
+        }
+
+        button[disabled] {
+            opacity: 0.5;
+            cursor: progress;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 12px 14px;
+            margin-bottom: 12px;
+        }
+
+        .transcript {
+            font-family: "Noto Naskh Arabic", "Traditional Arabic", serif;
+            font-size: 1.25rem;
+            min-height: 2.4em;
+            background: var(--surface-2);
+            border-radius: 10px;
+            padding: 8px 10px;
+            margin: 8px 0;
+        }
+
+        .stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            font-size: 0.9rem;
+        }
+
+        .stats b {
+            color: var(--accent);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.95rem;
+        }
+
+        th,
+        td {
+            border-bottom: 1px solid var(--border);
+            padding: 4px 6px;
+            text-align: start;
+        }
+
+        td.expected {
+            font-family: "Noto Naskh Arabic", "Traditional Arabic", serif;
+            font-size: 1.1rem;
+        }
+
+        .mark-ok {
+            color: var(--good);
+        }
+
+        .mark-weak {
+            color: var(--warn);
+        }
+
+        .mark-bad {
+            color: var(--bad);
+        }
+
+        pre {
+            background: var(--surface-2);
+            border-radius: 10px;
+            padding: 10px;
+            overflow: auto;
+            font-size: 0.82rem;
+            direction: ltr;
+            text-align: left;
+        }
+
+        .console {
+            max-height: 260px;
+            overflow-y: auto;
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: var(--surface-2);
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 0.8rem;
+            line-height: 1.55;
+            direction: ltr;
+            text-align: left;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .console div {
+            padding: 1px 0;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+        }
+
+        .console .ok {
+            color: var(--good);
+        }
+
+        .console .bad {
+            color: var(--bad);
+        }
+
+        .console .dim {
+            color: var(--muted);
+        }
+
+        #level {
+            height: 6px;
+            width: 160px;
+            background: var(--surface-3);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        #level-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--accent);
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Speech spike — قياس دقة التعرّف المحلي على التلاوة
+        <span style="color:var(--muted);font-size:0.8rem">(dev tool)</span>
+    </h1>
+    <p class="note">
+        أداة لتقييم محرّك الحفظ المحلي (نماذج قرآنية مدرّبة) على هذا الجهاز. جرّب كلًا من
+        الاختبار من ملف تلاوة جاهز (بلا ميكروفون) والتسجيل المباشر. تُحفظ النتائج في الصفحة
+        ويمكن نسخها JSON. هذه الصفحة للتطوير فقط وليست جزءًا من التخزين دون اتصال.
+    </p>
+
+    <div class="card">
+        <h2>١. ما ستتلوه · expected text</h2>
+        <div class="row">
+            <label>سورة <input id="surah" type="text" inputmode="numeric" value="112" size="3"></label>
+            <label>من <input id="from" type="text" inputmode="numeric" value="1" size="3"></label>
+            <label>إلى <input id="to" type="text" inputmode="numeric" value="4" size="3"></label>
+            <button id="load-xml">تحميل من المصحف</button>
+            <button class="preset" data-s="1" data-a="1" data-b="7">الفاتحة</button>
+            <button class="preset" data-s="112" data-a="1" data-b="4">الإخلاص</button>
+            <button class="preset" data-s="36" data-a="1" data-b="12">يس ١–١٢</button>
+        </div>
+        <textarea id="expected" spellcheck="false"
+            placeholder="أو الصق النص المتوقع هنا…">بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ قُلْ هُوَ ٱللَّهُ أَحَدٌ ٱللَّهُ ٱلصَّمَدُ لَمْ يَلِدْ وَلَمْ يُولَدْ وَلَمْ يَكُن لَّهُۥ كُفُوًا أَحَدٌ</textarea>
+        <p class="note" style="margin:8px 0 0">
+            عند اختبار ملف تلاوة، يُطابَق النص المسموع مع الآية المختارة في البطاقة التالية.
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>٢. اختبار من ملف تلاوة · no microphone needed</h2>
+        <div class="row">
+            <label>القارئ
+                <select id="reciter-select" disabled>
+                    <option value="">جارٍ التحميل…</option>
+                </select>
+            </label>
+            <label>سورة <input id="file-surah" type="text" inputmode="numeric" value="1" size="3"></label>
+            <label>آية <input id="file-ayah" type="text" inputmode="numeric" value="1" size="3"></label>
+            <label>المحرّك
+                <select id="device-select">
+                    <option value="auto" selected>تلقائي</option>
+                    <option value="webgpu">WebGPU (مفضّل، يرجع للمعالج عند الفشل)</option>
+                    <option value="wasm">المعالج (WASM) فقط</option>
+                </select>
+            </label>
+            <button id="file-test" class="primary" disabled>فرّغ وقارن</button>
+        </div>
+        <div id="file-status" class="note" style="margin:0">—</div>
+    </div>
+
+    <div class="card">
+        <h2>٣. التسجيل بالميكروفون · live</h2>
+        <div class="row">
+            <button id="mic" class="primary" disabled>● ابدأ الاستماع</button>
+            <div id="level">
+                <div id="level-fill"></div>
+            </div>
+            <span id="status" style="color:var(--muted)">جاهز</span>
+        </div>
+        <div id="session" class="transcript"></div>
+        <div class="row">
+            <button id="save-run" disabled>احفظ النتيجة لهذه الجلسة</button>
+            <button id="copy-all">انسخ كل النتائج (JSON)</button>
+            <button id="clear-all">امسح النتائج</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>٤. القدرات · capability probes</h2>
+        <pre id="probes">…</pre>
+    </div>
+
+    <div class="card">
+        <h2>٥. السجل الحي · live log</h2>
+        <div class="row">
+            <button id="log-copy">انسخ السجل</button>
+            <button id="log-clear">امسح السجل</button>
+        </div>
+        <div id="log" class="console" aria-live="polite"></div>
+    </div>
+
+    <div class="card">
+        <h2>٦. مقارنة المحرّكات · compare engines</h2>
+        <p class="note" style="margin:0 0 8px">
+            يُشغّل نفس المقطع الصوتي (القارئ والسورة والآية المختارون في القسم ٢) عبر كل المحرّكات المتاحة
+            ويسرد النتائج جنبًا إلى جنب. محرّك Whisper يُحمَّل حسب المنتقي في القسم ٢.
+        </p>
+        <div class="row">
+            <button id="compare-all" class="primary" disabled>قارن كل المحرّكات على هذه الآية</button>
+            <span id="compare-status" class="note" style="margin:0">…</span>
+        </div>
+        <div id="engine-availability" class="note" style="margin:6px 0 0"></div>
+        <div id="compare-results"></div>
+    </div>
+
+    <h2>النتائج · runs</h2>
+    <div id="runs"></div>
+
+    <script src="../memorize-core.js"></script>
+    <script src="../memorize-asr.js"></script>
+    <script src="../ort-nemo-asr.js"></script>
+    <script>
+        (function () {
+            'use strict';
+
+            var Core = window.QuranMemorizeCore;
+            var els = {
+                surah: document.getElementById('surah'),
+                from: document.getElementById('from'),
+                to: document.getElementById('to'),
+                expected: document.getElementById('expected'),
+                reciter: document.getElementById('reciter-select'),
+                fileSurah: document.getElementById('file-surah'),
+                fileAyah: document.getElementById('file-ayah'),
+                deviceSelect: document.getElementById('device-select'),
+                fileTest: document.getElementById('file-test'),
+                fileStatus: document.getElementById('file-status'),
+                mic: document.getElementById('mic'),
+                status: document.getElementById('status'),
+                session: document.getElementById('session'),
+                saveRun: document.getElementById('save-run'),
+                copyAll: document.getElementById('copy-all'),
+                clearAll: document.getElementById('clear-all'),
+                probes: document.getElementById('probes'),
+                log: document.getElementById('log'),
+                logCopy: document.getElementById('log-copy'),
+                logClear: document.getElementById('log-clear'),
+                runs: document.getElementById('runs'),
+                levelFill: document.getElementById('level-fill'),
+                compareAll: document.getElementById('compare-all'),
+                compareStatus: document.getElementById('compare-status'),
+                engineAvailability: document.getElementById('engine-availability'),
+                compareResults: document.getElementById('compare-results')
+            };
+
+            var runs = [];
+            var suraNodes = null;
+            var engine = null;
+            var engineInfo = null;
+            var sessionText = '';
+            var modelsRequested = false;
+
+            function setStatus(text) {
+                els.status.textContent = text;
+            }
+
+            function setFileStatus(text) {
+                els.fileStatus.textContent = text;
+            }
+
+            /* ---- live log ------------------------------------------------------ */
+
+            var logLines = [];
+            var logProgress = { file: '', fileDone: false, totalDone: false };
+
+            function log(kind, text) {
+                var line = '[' + new Date().toISOString().slice(11, 19) + '] ' + text;
+                logLines.push(line);
+                if (logLines.length > 400) {
+                    logLines.shift();
+                }
+                var entry = document.createElement('div');
+                if (kind) {
+                    entry.className = kind;
+                }
+                entry.textContent = line;
+                els.log.appendChild(entry);
+                while (els.log.childNodes.length > 400) {
+                    els.log.removeChild(els.log.firstChild);
+                }
+                els.log.scrollTop = els.log.scrollHeight;
+            }
+
+            /* ---- expected text + data ------------------------------------------ */
+
+            function loadXml() {
+                return fetch('../../QuranText/Quran/quran-uthmani.xml')
+                    .then(function (response) { return response.text(); })
+                    .then(function (xml) {
+                        suraNodes = new DOMParser().parseFromString(xml, 'application/xml').querySelectorAll('sura');
+                        return suraNodes;
+                    });
+            }
+
+            function ayahText(surah, ayah) {
+                var node = suraNodes[surah - 1] && suraNodes[surah - 1].children[ayah - 1];
+                return node ? node.getAttribute('text') : '';
+            }
+
+            function rangeFromInputs() {
+                var s = parseInt(els.surah.value, 10) || 1;
+                var a = parseInt(els.from.value, 10) || 1;
+                var b = parseInt(els.to.value, 10) || a;
+                var texts = [];
+                for (var i = a; i <= b; i++) {
+                    var text = ayahText(s, i);
+                    if (text) {
+                        texts.push(text);
+                    }
+                }
+                els.expected.value = texts.join(' ');
+            }
+
+            document.getElementById('load-xml').addEventListener('click', function () {
+                (suraNodes ? Promise.resolve() : loadXml()).then(rangeFromInputs);
+            });
+            Array.prototype.forEach.call(document.querySelectorAll('.preset'), function (button) {
+                button.addEventListener('click', function () {
+                    els.surah.value = button.dataset.s;
+                    els.from.value = button.dataset.a;
+                    els.to.value = button.dataset.b;
+                    els.fileSurah.value = button.dataset.s;
+                    els.fileAyah.value = button.dataset.a;
+                    (suraNodes ? Promise.resolve() : loadXml()).then(rangeFromInputs);
+                });
+            });
+
+            function loadReciters() {
+                return fetch('../../QuranAudio/reciters.json')
+                    .then(function (response) { return response.json(); })
+                    .then(function (list) {
+                        els.reciter.textContent = '';
+                        (list || []).forEach(function (reciter) {
+                            var option = document.createElement('option');
+                            option.value = reciter.id;
+                            option.textContent = reciter.name || reciter.id;
+                            els.reciter.appendChild(option);
+                        });
+                        els.reciter.disabled = !list || !list.length;
+                    })
+                    .catch(function () {
+                        els.reciter.disabled = true;
+                        setFileStatus('تعذّر تحميل قائمة القرّاء');
+                    });
+            }
+
+            /* ---- engine -------------------------------------------------------- */
+
+            function ensureEngine() {
+                if (!engine) {
+                    engine = window.QuranASR.createEngine({
+                        level: function (value) {
+                            els.levelFill.style.width = Math.round(Math.min(1, value) * 100) + '%';
+                        },
+                        status: function (stage) {
+                            log('dim', 'stage: ' + stage);
+                            if (stage === 'requesting-mic') {
+                                setStatus('جارٍ طلب الميكروفون…');
+                            } else if (stage === 'listening') {
+                                setStatus('أستمع… اتلُ الآن');
+                            } else if (stage === 'transcribing') {
+                                setStatus('يفرّغ الكلام…');
+                            } else if (stage === 'engine-restart') {
+                                setStatus('أُعيد تشغيل المحرّك بعد توقف طويل');
+                            } else if (typeof stage === 'string' && stage.indexOf('loading ') === 0) {
+                                setStatus('تهيئة المحرّك (' + stage.slice(8) + ')…');
+                                setFileStatus('تهيئة المحرّك (' + stage.slice(8) + ')…');
+                            } else if (typeof stage === 'string' && stage.indexOf('failed ') === 0) {
+                                setStatus('تعذّر مسار (' + stage.slice(7) + ') — أجرّب بديلًا…');
+                                setFileStatus('تعذّر مسار (' + stage.slice(7) + ') — أجرّب بديلًا…');
+                            }
+                        },
+                        progress: function (info) {
+                            if (info && typeof info.progress === 'number') {
+                                var text = 'تنزيل النموذج… ' + Math.round(info.progress) + '٪';
+                                setStatus(text);
+                                setFileStatus(text);
+                                var pct = Math.round(info.progress);
+                                var name = info.status === 'progress_total' ? '' : String(info.file || '');
+                                if (!name) {
+                                    if (!logProgress.totalDone && pct >= 100) {
+                                        logProgress.totalDone = true;
+                                        log('dim', 'model download: total 100%');
+                                    }
+                                } else if (name !== logProgress.file) {
+                                    logProgress.file = name;
+                                    logProgress.fileDone = false;
+                                    log('dim', 'model file: ' + name.split('/').pop());
+                                } else if (!logProgress.fileDone && pct >= 100) {
+                                    logProgress.fileDone = true;
+                                    log('dim', 'model file: ' + name.split('/').pop() + ' 100%');
+                                }
+                            }
+                        },
+                        ready: function (info) {
+                            engineInfo = info;
+                            els.mic.disabled = false;
+                            els.fileTest.disabled = false;
+                            updateProbes();
+                            log('ok', 'MODEL READY — ' + info.device + '/' + info.dtype);
+                            setStatus('النموذج جاهز (' + info.device + '/' + info.dtype + ')');
+                            setFileStatus('النموذج جاهز — اختر سورة وآية ثم اضغط «فرّغ وقارن»');
+                        },
+                        transcript: function (text, meta) {
+                            sessionText = (sessionText ? sessionText + ' ' : '') + text;
+                            els.session.textContent = sessionText;
+                            els.saveRun.disabled = !sessionText;
+                            log('ok', 'transcript (' + (meta && meta.ms ? meta.ms : '?') + ' ms): ' + text);
+                            setStatus('فرّغ (' + (meta && meta.ms ? meta.ms + ' مللي' : '') + '): ' + text);
+                        },
+                        error: function (message) {
+                            log('bad', 'ENGINE ERROR: ' + message);
+                            setStatus('خطأ: ' + message);
+                        }
+                    });
+                }
+                return engine;
+            }
+
+            function loadModelIfNeeded() {
+                if (modelsRequested) {
+                    return Promise.resolve();
+                }
+                modelsRequested = true;
+                setStatus('تجهيز النموذج…');
+                setFileStatus('تجهيز النموذج…');
+                logProgress = { file: '', fileDone: false, totalDone: false };
+                return ensureEngine().ensureModel(els.deviceSelect.value);
+            }
+
+            /* ---- scoring ------------------------------------------------------- */
+
+            function scoreRun(expectedText, heardText, meta) {
+                var heardWords = Core.tokenize(heardText);
+                var items = Core.buildItems([{ s: 0, a: 0, text: expectedText }]);
+                var result = Core.alignUtterance(heardWords, items, 0, items.length);
+
+                var rows = [];
+                var rowOfItem = {};
+                items.forEach(function (item, index) {
+                    if (!item.meta) {
+                        rowOfItem[index] = rows.length;
+                        rows.push({ word: item.raw, score: 0, heard: '' });
+                    }
+                });
+                result.pairs.forEach(function (pair) {
+                    if (pair.type === 'match' && rowOfItem[pair.item] !== undefined) {
+                        var row = rows[rowOfItem[pair.item]];
+                        row.score = pair.score;
+                        row.heard = heardWords[pair.h] || '';
+                    }
+                });
+
+                var strong = 0;
+                var weak = 0;
+                rows.forEach(function (row) {
+                    if (row.score >= Core.STRONG_SIM) {
+                        strong += 1;
+                    } else if (row.score > 0) {
+                        weak += 1;
+                    }
+                });
+
+                return {
+                    at: new Date().toISOString(),
+                    source: (meta && meta.source) || 'mic',
+                    device: engineInfo ? engineInfo.device + '/' + engineInfo.dtype : '?',
+                    ms: (meta && meta.ms) | 0,
+                    expected: rows.length,
+                    heard: heardWords,
+                    rows: rows,
+                    strong: strong,
+                    weak: weak,
+                    missed: rows.length - strong - weak,
+                    matchRate: rows.length ? (strong / rows.length) : 0,
+                    confidence: result.confidence
+                };
+            }
+
+            function renderRuns() {
+                els.runs.textContent = '';
+                runs.slice().reverse().forEach(function (run) {
+                    var number = runs.length - runs.indexOf(run);
+                    var card = document.createElement('div');
+                    card.className = 'card';
+
+                    var head = document.createElement('div');
+                    head.className = 'stats';
+                    head.innerHTML = '<span><b>#' + number + '</b> ' + run.source + '</span>'
+                        + '<span>' + run.device + (run.ms ? ' — ' + run.ms + ' مللي' : '') + '</span>'
+                        + '<span class="mark-ok">قوية: <b>' + run.strong + '</b></span>'
+                        + '<span class="mark-weak">ضعيفة: <b>' + run.weak + '</b></span>'
+                        + '<span class="mark-bad">مفقودة: <b>' + run.missed + '</b></span>'
+                        + '<span>نسبة المطابقة: <b>' + Math.round(run.matchRate * 100) + '%</b></span>';
+                    card.appendChild(head);
+
+                    var heard = document.createElement('p');
+                    heard.className = 'transcript';
+                    heard.textContent = 'سُمع: ' + (run.heard.join(' ') || '—');
+                    card.appendChild(heard);
+
+                    var table = document.createElement('table');
+                    table.innerHTML = '<tr><th>المتوقع</th><th>الحالة</th><th>المسموع</th></tr>';
+                    run.rows.forEach(function (row) {
+                        var tr = document.createElement('tr');
+                        var mark = row.score >= Core.STRONG_SIM ? '<span class="mark-ok">✓</span>'
+                            : row.score > 0 ? '<span class="mark-weak">≈</span>'
+                                : '<span class="mark-bad">✗</span>';
+                        tr.innerHTML = '<td class="expected">' + row.word + '</td><td>' + mark
+                            + ' ' + (row.score ? row.score.toFixed(2) : '') + '</td><td class="expected">'
+                            + (row.heard || '—') + '</td>';
+                        table.appendChild(tr);
+                    });
+                    card.appendChild(table);
+                    els.runs.appendChild(card);
+                });
+            }
+
+            /* ---- actions ------------------------------------------------------- */
+
+            els.fileTest.addEventListener('click', function () {
+                var reciter = els.reciter.value;
+                var surah = parseInt(els.fileSurah.value, 10) || 1;
+                var ayah = parseInt(els.fileAyah.value, 10) || 1;
+                if (!reciter) {
+                    return;
+                }
+                var expected = ayahText(surah, ayah);
+                if (!expected) {
+                    setFileStatus('لم أجد نص هذه الآية');
+                    return;
+                }
+                els.fileTest.disabled = true;
+                log('dim', 'file test: surah ' + surah + ' ayah ' + ayah);
+                loadModelIfNeeded().then(function () {
+                    setFileStatus('تحميل الملف الصوتي…');
+                    var url = '../../QuranAudio/' + encodeURIComponent(reciter) + '/'
+                        + String(surah).padStart(3, '0') + String(ayah).padStart(3, '0') + '.mp3';
+                    log('dim', 'fetching ' + url);
+                    return fetch(url).then(function (response) {
+                        if (!response.ok) {
+                            throw new Error('ملف التلاوة غير موجود (' + response.status + ')');
+                        }
+                        return response.arrayBuffer();
+                    });
+                }).then(function (buffer) {
+                    setFileStatus('فك ترميز الصوت…');
+                    log('dim', 'decoding audio (' + buffer.byteLength + ' bytes)');
+                    return ensureEngine().decodeTo16k(buffer);
+                }).then(function (samples) {
+                    log('dim', 'decoded ' + Math.round(samples.length / 16000) + 's @16k — transcribing…');
+                    setFileStatus('التفريغ… (' + Math.round(samples.length / 16000) + ' ثانية صوت)');
+                    return ensureEngine().transcribeSamples(new Float32Array(samples));
+                }).then(function (result) {
+                    var run = scoreRun(expected, result.text, {
+                        source: 'ملف ' + surah + ':' + ayah,
+                        ms: result.ms
+                    });
+                    runs.push(run);
+                    renderRuns();
+                    log('ok', 'scored: strong ' + run.strong + '/' + run.expected + ', weak ' + run.weak
+                        + ', missed ' + run.missed + ' — decode ' + result.ms + ' ms');
+                    setFileStatus('انتهى — انظر النتيجة بالأسفل');
+                    els.fileTest.disabled = false;
+                }).catch(function (error) {
+                    log('bad', 'file test failed: ' + (error && error.message));
+                    setFileStatus('تعذّر: ' + (error && error.message));
+                    if (!engineInfo) {
+                        modelsRequested = false; // let a later click retry the load
+                    }
+                    els.fileTest.disabled = !engineInfo;
+                });
+            });
+
+            els.mic.addEventListener('click', function () {
+                var listening = els.mic.classList.contains('recording');
+                if (listening) {
+                    ensureEngine().stop();
+                    els.mic.classList.remove('recording');
+                    els.mic.textContent = '● ابدأ الاستماع';
+                    setStatus('توقف التسجيل — احفظ النتيجة');
+                    return;
+                }
+                setStatus('تجهيز المحرّك…');
+                loadModelIfNeeded().then(function () {
+                    return ensureEngine().start();
+                }).then(function () {
+                    els.mic.classList.add('recording');
+                    els.mic.textContent = '■ أوقف';
+                    setStatus('أستمع… اتلُ الآن');
+                }).catch(function (error) {
+                    setStatus('تعذّر بدء الاستماع: ' + (error && error.message));
+                });
+            });
+
+            els.saveRun.addEventListener('click', function () {
+                if (!sessionText) {
+                    return;
+                }
+                runs.push(scoreRun(els.expected.value.trim(), sessionText, { source: 'mic' }));
+                renderRuns();
+                sessionText = '';
+                els.session.textContent = '';
+                els.saveRun.disabled = true;
+                setStatus('حُفظت النتيجة');
+            });
+
+            els.copyAll.addEventListener('click', function () {
+                var data = JSON.stringify(runs, null, 2);
+                navigator.clipboard.writeText(data).then(function () {
+                    setStatus('نُسخت ' + runs.length + ' نتيجة إلى الحافظة');
+                }, function () {
+                    window.prompt('انسخ النتائج يدويًا:', data);
+                });
+            });
+
+            els.clearAll.addEventListener('click', function () {
+                runs = [];
+                renderRuns();
+            });
+
+            /* ---- compare all engines ------------------------------------------- */
+
+            var int8Engine = null;    // ORT-web int8 FastConformer engine
+
+            function setCompareStatus(text) {
+                els.compareStatus.textContent = text;
+            }
+
+            function refreshAvailability() {
+                if (!els.engineAvailability) {
+                    return Promise.resolve();
+                }
+                var lines = ['✓ Whisper-base (Basira) — جاهز في المتصفح (يُحمَّل عند أول استخدام)'];
+                var int8Check = window.OrtNemoASR
+                    ? window.OrtNemoASR.isAvailable('quran-int8-ort').then(function (ok) {
+                        return (ok ? '✓ ' : '✗ ') + 'FastConformer Quran int8 (ORT-Web) — '
+                            + (ok ? 'جاهز للاختبار' : 'الملفات غير موجودة (شغّل: node QuranHifz/tools/fetch-asr-models.mjs)');
+                    })
+                    : Promise.resolve('✗ FastConformer Quran int8 (ORT-Web) — script not loaded');
+                return int8Check.then(function (result) {
+                    els.engineAvailability.textContent = lines.concat([result]).join('\n');
+                });
+            }
+
+            function renderCompare(rows, expected, surah, ayah) {
+                els.compareResults.textContent = '';
+                var card = document.createElement('div');
+                card.className = 'card';
+                var head = document.createElement('div');
+                head.className = 'stats';
+                head.innerHTML = '<span><b>مقارنة</b> ' + surah + ':' + ayah + '</span>'
+                    + '<span class="expected" dir="rtl">المتوقع: ' + expected + '</span>';
+                card.appendChild(head);
+                var table = document.createElement('table');
+                table.innerHTML = '<tr><th>المحرّك</th><th>النتيجة</th><th>النص المسموع</th><th>الزمن</th></tr>';
+                rows.forEach(function (row) {
+                    var label = row.id === 'whisper-basira' ? 'Whisper-base (Basira)'
+                        : row.id === 'int8-quran-ort' ? 'FastConformer Quran int8 (ORT-Web)' : row.id;
+                    var tr = document.createElement('tr');
+                    if (!row.ok) {
+                        tr.innerHTML = '<td>' + label + '</td><td colspan="3" class="mark-bad">' + row.error + '</td>';
+                    } else {
+                        var run = scoreRun(expected, row.result.text, {});
+                        tr.innerHTML = '<td>' + label + '</td>'
+                            + '<td><span class="mark-ok">قوية ' + run.strong + '</span>/' + run.expected
+                            + ' <span class="mark-bad">مفقودة ' + run.missed + '</span></td>'
+                            + '<td class="expected" dir="rtl">' + (row.result.text || '(فارغ)') + '</td>'
+                            + '<td>' + row.result.ms + ' مللي</td>';
+                    }
+                    table.appendChild(tr);
+                });
+                card.appendChild(table);
+                els.compareResults.appendChild(card);
+            }
+
+            els.compareAll.addEventListener('click', function () {
+                var reciter = els.reciter.value;
+                var surah = parseInt(els.fileSurah.value, 10) || 1;
+                var ayah = parseInt(els.fileAyah.value, 10) || 1;
+                var expected = ayahText(surah, ayah);
+                if (!reciter || !expected) {
+                    setCompareStatus('اختر قارئًا وآية أولًا');
+                    return;
+                }
+                els.compareAll.disabled = true;
+                els.compareResults.textContent = '';
+                log('dim', 'compare-all: ' + surah + ':' + ayah + ' — ' + reciter);
+                var samples = null;
+                var url = '../../QuranAudio/' + encodeURIComponent(reciter) + '/'
+                    + String(surah).padStart(3, '0') + String(ayah).padStart(3, '0') + '.mp3';
+                setCompareStatus('تحميل الملف الصوتي…');
+                fetch(url).then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('ملف التلاوة غير موجود (' + response.status + ')');
+                    }
+                    return response.arrayBuffer();
+                }).then(function (buffer) {
+                    setCompareStatus('فك ترميز الصوت…');
+                    return ensureEngine().decodeTo16k(buffer);
+                }).then(function (decoded) {
+                    samples = new Float32Array(decoded);
+                    log('dim', 'compare audio: ' + Math.round(samples.length / 16000) + 's @16k');
+                    var plan = [{
+                        id: 'whisper-basira',
+                        run: function () {
+                            return loadModelIfNeeded().then(function () {
+                                setCompareStatus('التفريغ عبر Whisper-base…');
+                                return ensureEngine().transcribeSamples(samples).then(function (result) {
+                                    return { text: result.text, ms: result.ms };
+                                });
+                            });
+                        }
+                    }, {
+                        id: 'int8-quran-ort',
+                        run: function () {
+                            if (!window.OrtNemoASR) { return Promise.reject(new Error('ort-nemo script not loaded')); }
+                            if (!int8Engine) {
+                                int8Engine = window.OrtNemoASR.create('quran-int8-ort', {
+                                    status: function (t) { log('dim', '[int8] ' + t); },
+                                    ready: function () { log('ok', '[int8] READY'); },
+                                    progress: function () { }
+                                }, { ep: 'wasm' });
+                            }
+                            return int8Engine.ensureModel().then(function () {
+                                setCompareStatus('التفريغ عبر FastConformer int8…');
+                                return int8Engine.transcribeSamples(samples);
+                            });
+                        }
+                    }];
+                    var rows = [];
+                    var chain = Promise.resolve();
+                    plan.forEach(function (step) {
+                        chain = chain.then(function () {
+                            log('dim', 'compare: running ' + step.id + '…');
+                            return step.run().then(function (result) {
+                                rows.push({ id: step.id, ok: true, result: result });
+                                renderCompare(rows, expected, surah, ayah);
+                            }).catch(function (error) {
+                                rows.push({ id: step.id, ok: false, error: String((error && error.message) || error) });
+                                renderCompare(rows, expected, surah, ayah);
+                            });
+                        });
+                    });
+                    return chain;
+                }).then(function () {
+                    setCompareStatus('انتهت المقارنة');
+                    els.compareAll.disabled = false;
+                    refreshAvailability();
+                }).catch(function (error) {
+                    setCompareStatus('تعذّرت المقارنة: ' + ((error && error.message) || error));
+                    els.compareAll.disabled = false;
+                });
+            });
+
+            /* ---- probes -------------------------------------------------------- */
+
+            function updateProbes() {
+                var info = {
+                    userAgent: navigator.userAgent,
+                    webgpu: Boolean(navigator.gpu),
+                    engine: engineInfo ? engineInfo : null,
+                    model: 'iqbalaesthetic/Basira (tarteel-ai/whisper-base-ar-quran)'
+                };
+                els.probes.textContent = JSON.stringify(info, null, 2);
+            }
+
+            /* ---- boot ---------------------------------------------------------- */
+
+            updateProbes();
+            log('dim', 'page booted — engine script ' + (window.QuranASR ? 'loaded' : 'MISSING'));
+            Promise.all([loadXml(), loadReciters()]).then(function () {
+                rangeFromInputs();
+                els.mic.disabled = false;
+                els.fileTest.disabled = false;
+                els.compareAll.disabled = false;
+                refreshAvailability();
+                log('ok', 'data ready — xml + reciters loaded');
+            }).catch(function () {
+                log('bad', 'could not load app data');
+                setStatus('تعذّر تحميل بيانات التطبيق');
+            });
+
+            els.logCopy.addEventListener('click', function () {
+                var text = logLines.join('\n');
+                navigator.clipboard.writeText(text).then(function () {
+                    setStatus('نُسخ السجل');
+                }, function () {
+                    window.prompt('انسخ السجل:', text);
+                });
+            });
+
+            els.logClear.addEventListener('click', function () {
+                logLines = [];
+                els.log.textContent = '';
+            });
+
+            /* Headless test hooks */
+            window.__spike = {
+                status: function () {
+                    return { status: els.status.textContent, fileStatus: els.fileStatus.textContent };
+                },
+                runs: function () { return runs; },
+                fileTest: function (surah, ayah) {
+                    els.fileSurah.value = surah;
+                    els.fileAyah.value = ayah;
+                    els.fileTest.click();
+                },
+                engine: function () { return engineInfo; },
+                rawEngine: function () { return engine; },
+                compare: function (surah, ayah, reciter) {
+                    if (reciter) {
+                        els.reciter.value = reciter;
+                    }
+                    els.fileSurah.value = surah;
+                    els.fileAyah.value = ayah;
+                    els.compareAll.click();
+                },
+                compareText: function () { return els.compareResults.textContent; },
+                availability: function () { return els.engineAvailability.textContent; },
+                log: function () { return logLines.slice(-60); },
+                workerUrl: function () {
+                    return engine ? engine.workerUrl() : (window.QuranASR ? 'engine not created yet' : 'no QuranASR');
+                }
+            };
+        })();
+    </script>
+</body>
+
+</html>

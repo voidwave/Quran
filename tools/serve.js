@@ -24,7 +24,8 @@ const CONTENT_TYPES = {
     '.mp3': 'audio/mpeg',
     '.png': 'image/png',
     '.ttf': 'font/ttf',
-    '.woff2': 'font/woff2'
+    '.woff2': 'font/woff2',
+    '.wasm': 'application/wasm'
 };
 
 http.createServer(function (request, response) {

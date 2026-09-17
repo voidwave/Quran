@@ -1,0 +1,13 @@
+﻿W=22 C=70 K=2 FAIL @/layers.0/conv/depthwise_conv/Conv ┬╖ Non-zero status code returned while running Conv node. Name:'/layers.0/conv/depthwise_conv/Conv' Sta
+W=22 C=70 K=3 FAIL @/layers.0/conv/depthwise_conv/Conv ┬╖ Non-zero status code returned while running Conv node. Name:'/layers.0/conv/depthwise_conv/Conv' Sta
+W=22 C=70 K=4 OK in 93ms ┬╖ out [1,512,1]
+W=22 C=70 K=5 FAIL @/layers.1/self_attn/Where (71 by 72) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=6 FAIL @/layers.1/self_attn/Where (71 by 73) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=7 FAIL @/layers.1/self_attn/Where (71 by 74) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=8 FAIL @/layers.1/self_attn/Where (71 by 75) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=10 FAIL @/layers.1/self_attn/Where (71 by 77) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=12 FAIL @/layers.1/self_attn/Where (71 by 79) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=14 FAIL @/layers.1/self_attn/Where (71 by 81) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=16 FAIL @/layers.1/self_attn/Where (71 by 83) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=18 FAIL @/layers.1/self_attn/Where (71 by 85) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess
+W=22 C=70 K=20 FAIL @/layers.1/self_attn/Where (71 by 87) ┬╖ Non-zero status code returned while running Where node. Name:'/layers.1/self_attn/Where' Status Mess

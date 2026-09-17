@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0f10">
+    <link rel="manifest" href="../manifest.webmanifest">
+    <link rel="icon" type="image/png" sizes="192x192" href="../icons/icon-192.png">
+    <link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="القرآن">
+    <title>الحفظ — القرآن الكريم</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Naskh+Arabic:wght@400;500;600;700&display=swap">
+    <script>
+        // Apply the saved colour scheme before the first paint to avoid a flash.
+        (function () {
+            var theme = 'dark';
+            try {
+                theme = localStorage.getItem('quran-theme')
+                    || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+            } catch (error) {
+                theme = 'dark';
+            }
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        @font-face {
+            font-family: 'Amiri Quran';
+            src: url('https://fonts.gstatic.com/s/amiriquran/v19/_Xmo-Hk0rD6DbUL4_vH8Zp5v5i2ssg.woff2') format('woff2');
+            font-display: swap;
+        }
+
+        @font-face {
+            font-family: 'Uthmanic';
+            src: url('../fonts/uthmanic_hafs_v22.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }
+
+        /* ------------------------------------------------------------------
+           Design tokens (same palette as the reader and the mushaf)
+        ------------------------------------------------------------------ */
+        :root {
+            color-scheme: dark;
+            --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+            --font-ar: "Noto Naskh Arabic", "Segoe UI", Tahoma, serif;
+            --font-quran: "Amiri Quran", "Uthmanic", "Noto Naskh Arabic", serif;
+
+            --bg: #0a0f10;
+            --bg-glow: #15231f;
+            --appbar: rgba(10, 15, 16, 0.86);
+            --surface: #111a1b;
+            --surface-2: #16211f;
+            --surface-3: #1e2b29;
+            --border: rgba(255, 255, 255, 0.08);
+            --border-strong: rgba(226, 190, 106, 0.38);
+
+            --text: #edf3f1;
+            --text-dim: #b4c1bd;
+            --muted: #8b9a96;
+
+            --accent: #e2be6a;
+            --accent-strong: #c9a24f;
+            --accent-soft: rgba(226, 190, 106, 0.14);
+            --accent-ring: rgba(226, 190, 106, 0.45);
+            --on-accent: #1b1508;
+
+            --quran: #f7f3e7;
+            --mark-bg: #f2d475;
+            --mark-text: #241a08;
+
+            --good: #7fc79a;
+            --warn: #e2be6a;
+            --bad: #e07f7f;
+            --bad-soft: rgba(217, 96, 96, 0.16);
+            --bad-ring: rgba(217, 96, 96, 0.55);
+
+            --radius: 16px;
+            --radius-sm: 10px;
+            --shadow: 0 18px 42px rgba(0, 0, 0, 0.5);
+        }
+
+        :root[data-theme="light"] {
+            color-scheme: light;
+            --bg: #f7f5ef;
+            --bg-glow: #ffffff;
+            --appbar: rgba(250, 248, 243, 0.9);
+            --surface: #ffffff;
+            --surface-2: #f4f1e9;
+            --surface-3: #eae5d9;
+            --border: rgba(23, 43, 38, 0.12);
+            --border-strong: rgba(150, 112, 28, 0.42);
+
+            --text: #17211f;
+            --text-dim: #46544f;
+            --muted: #6d7b76;
+
+            --accent: #96701d;
+            --accent-strong: #7c5b13;
+            --accent-soft: rgba(150, 112, 28, 0.12);
+            --accent-ring: rgba(150, 112, 28, 0.38);
+            --on-accent: #fffaf0;
+
+            --quran: #14201d;
+            --mark-bg: #ffe08a;
+            --mark-text: #3a2a00;
+
+            --good: #2e7d4f;
+            --warn: #96701d;
+            --bad: #b23b3b;
+            --bad-soft: rgba(178, 59, 59, 0.12);
+            --bad-ring: rgba(178, 59, 59, 0.5);
+
+            --shadow: 0 16px 34px rgba(28, 38, 35, 0.14);
+        }
+
+        /* ------------------------------------------------------------------
+           Base
+        ------------------------------------------------------------------ */
+        * {
+            box-sizing: border-box;
+        }
+
+        [hidden] {
+            display: none !important;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            min-width: 320px;
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font-ui);
+            font-size: 16px;
+            line-height: 1.6;
+            overflow-wrap: break-word;
+            -webkit-text-size-adjust: 100%;
+        }
+
+        body::before {
+            position: fixed;
+            z-index: -1;
+            inset: 0;
+            background:
+                radial-gradient(1100px 520px at 50% -10%, var(--bg-glow), transparent 72%),
+                radial-gradient(680px 420px at 100% 100%, var(--accent-soft), transparent 70%);
+            pointer-events: none;
+            content: "";
+        }
+
+        button,
+        input,
+        select {
+            font: inherit;
+            color: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        ::selection {
+            background: var(--accent-soft);
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* ------------------------------------------------------------------
+           Buttons / fields
+        ------------------------------------------------------------------ */
+        .btn {
+            display: inline-flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: center;
+            min-height: 40px;
+            padding: 7px 13px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface-2);
+            color: var(--text);
+            font-family: var(--font-ar);
+            font-size: 0.95rem;
+            font-weight: 600;
+            line-height: 1.3;
+            white-space: nowrap;
+            -webkit-tap-highlight-color: transparent;
+            transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 120ms ease;
+        }
+
+        .btn:hover {
+            border-color: var(--border-strong);
+            background: var(--surface-3);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn:focus-visible {
+            outline: 2px solid var(--accent-ring);
+            outline-offset: 2px;
+        }
+
+        .btn[disabled] {
+            opacity: 0.45;
+            cursor: progress;
+        }
+
+        .btn svg {
+            flex: 0 0 auto;
+            width: 18px;
+            height: 18px;
+        }
+
+        .btn.is-active {
+            border-color: var(--accent-ring);
+            background: var(--accent-soft);
+            color: var(--accent);
+        }
+
+        .field {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+        }
+
+        .field__label {
+            color: var(--muted);
+            font-family: var(--font-ar);
+            font-size: 0.86rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .select,
+        .num-input {
+            min-height: 40px;
+            padding: 7px 10px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface-2);
+            color: var(--text);
+            font-family: var(--font-ar);
+            font-size: 0.95rem;
+            font-weight: 600;
+            -webkit-tap-highlight-color: transparent;
+            transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+        }
+
+        .select {
+            max-width: 11rem;
+            padding-inline-end: 26px;
+            appearance: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+        }
+
+        .select:hover,
+        .num-input:hover {
+            border-color: var(--border-strong);
+            background: var(--surface-3);
+        }
+
+        .select:focus-visible,
+        .num-input:focus-visible {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .select[disabled],
+        .num-input[disabled] {
+            opacity: 0.45;
+            cursor: progress;
+        }
+
+        .num-input {
+            width: 4.2rem;
+            text-align: center;
+        }
+
+        .select-wrap {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .select-wrap::after {
+            position: absolute;
+            inset-inline-end: 11px;
+            width: 7px;
+            height: 7px;
+            border-right: 2px solid var(--muted);
+            border-bottom: 2px solid var(--muted);
+            transform: rotate(45deg) translateY(-2px);
+            pointer-events: none;
+            content: "";
+        }
+
+        /* ------------------------------------------------------------------
+           App bar
+        ------------------------------------------------------------------ */
+        .appbar {
+            position: sticky;
+            z-index: 30;
+            top: 0;
+            padding-top: env(safe-area-inset-top);
+            background: var(--appbar);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+        }
+
+        .appbar__inner {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            width: min(100% - 24px, 1180px);
+            margin: 0 auto;
+            padding: 10px 0;
+        }
+
+        .range-controls {
+            display: flex;
+            flex: 1 1 auto;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+            align-items: center;
+        }
+
+        .view-switch {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--surface-2);
+        }
+
+        .view-switch__option {
+            display: inline-flex;
+            align-items: center;
+            min-height: 34px;
+            padding: 4px 15px;
+            border-radius: 9px;
+            color: var(--muted);
+            font-family: var(--font-ar);
+            font-size: 0.92rem;
+            font-weight: 600;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: background-color 160ms ease, color 160ms ease;
+        }
+
+        .view-switch__option:hover {
+            color: var(--text);
+        }
+
+        .view-switch__option.is-active {
+            background: var(--accent);
+            color: var(--on-accent);
+        }
+
+        #theme-toggle .icon-sun {
+            display: none;
+        }
+
+        :root[data-theme="light"] #theme-toggle .icon-sun {
+            display: block;
+        }
+
+        :root[data-theme="light"] #theme-toggle .icon-moon {
+            display: none;
+        }
+
+        /* ------------------------------------------------------------------
+           Verses
+        ------------------------------------------------------------------ */
+        #maincontent {
+            width: min(100% - 24px, 860px);
+            margin: 6px auto 170px;
+        }
+
+        .empty {
+            padding: 28px 18px;
+            border: 1px dashed var(--border);
+            border-radius: var(--radius);
+            color: var(--muted);
+            font-family: var(--font-ar);
+            font-size: 1.05rem;
+            text-align: center;
+        }
+
+        .surah-head {
+            display: flex;
+            gap: 14px;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            margin: 10px 0 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: linear-gradient(180deg, var(--surface-2), var(--surface));
+        }
+
+        .surah-head__badge {
+            display: grid;
+            place-items: center;
+            width: 40px;
+            height: 40px;
+            border: 1px solid var(--border-strong);
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-family: var(--font-ar);
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .surah-head__name {
+            margin: 0;
+            color: var(--text);
+            font-family: var(--font-quran);
+            font-size: clamp(1.5rem, 3.6vw, 2.1rem);
+            font-weight: 400;
+        }
+
+        .range-note {
+            margin: 0 0 14px;
+            color: var(--muted);
+            font-family: var(--font-ar);
+            font-size: 0.95rem;
+            text-align: center;
+        }
+
+        .basmala-row {
+            margin: 0 0 18px;
+            text-align: center;
+        }
+
+        .basmala {
+            margin: 0;
+            color: var(--accent);
+            font-family: var(--font-quran);
+            font-size: clamp(1.35rem, 1rem + 2vw, 1.9rem);
+            line-height: 2;
+        }
+
+        .ayah {
+            padding: 14px 18px 16px;
+            margin: 0 0 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            scroll-margin-top: 170px;
+            transition: border-color 220ms ease, box-shadow 220ms ease, background-color 220ms ease;
+        }
+
+        .ayah.is-complete {
+            border-color: var(--border-strong);
+        }
+
+        .ayah__head {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin: 0 0 10px;
+        }
+
+        .ayah__num {
+            display: grid;
+            place-items: center;
+            min-width: 32px;
+            height: 32px;
+            padding: 0 8px;
+            border: 1px solid var(--border-strong);
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-family: var(--font-ui);
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .ayah__rule {
+            flex: 1 1 auto;
+            height: 1px;
+            background: linear-gradient(to left, var(--border), transparent);
+        }
+
+        .ayah__text {
+            margin: 0;
+            font-family: var(--font-quran);
+            font-size: clamp(1.45rem, 1rem + 1.9vw, 2.05rem);
+            /* the word boxes are ~2.5em tall; keep clear space between
+               wrapped lines so the boxes never touch */
+            line-height: 2.9;
+            color: var(--quran);
+        }
+
+        /* ------------------------------------------------------------------
+           Word states
+        ------------------------------------------------------------------ */
+        .mw {
+            border-radius: 6px;
+            padding: 0 2px;
+            cursor: pointer;
+            transition: color 200ms ease, background-color 200ms ease, box-shadow 200ms ease, filter 200ms ease;
+        }
+
+        .mw.is-hidden {
+            color: transparent;
+            background: var(--surface-2);
+            box-shadow: inset 0 0 0 1px var(--border);
+            user-select: none;
+        }
+
+        .mw.is-hidden.is-blur {
+            color: inherit;
+            filter: blur(8px);
+            background: transparent;
+            box-shadow: none;
+        }
+
+        .mw.is-hint {
+            color: var(--text-dim);
+            background: var(--surface-2);
+            box-shadow: inset 0 0 0 1px var(--border);
+            user-select: none;
+        }
+
+        .mw.is-peek {
+            color: var(--text-dim);
+            background: var(--surface-2);
+        }
+
+        .mw-meta {
+            color: var(--accent);
+            opacity: 0.85;
+        }
+
+        .mw.is-ok {
+            color: var(--quran);
+        }
+
+        .mw.is-soft {
+            color: var(--quran);
+            opacity: 0.75;
+        }
+
+        .mw.is-unclear {
+            color: var(--quran);
+            box-shadow: inset 0 -4px 0 var(--accent-soft);
+        }
+
+        .mw.is-manual {
+            color: var(--quran);
+            box-shadow: inset 0 -4px 0 var(--accent-ring);
+        }
+
+        .mw.is-skip {
+            color: var(--text-dim);
+            background: var(--accent-soft);
+        }
+
+        .mw.is-err {
+            color: var(--text);
+            background: var(--bad-soft);
+            box-shadow: inset 0 0 0 1px var(--bad-ring);
+        }
+
+        .mw.is-wait {
+            color: transparent;
+            background: var(--bad-soft);
+            box-shadow: inset 0 0 0 1px var(--bad-ring);
+            user-select: none;
+        }
+
+        .mw.is-err-hint {
+            color: var(--text-dim);
+            background: var(--bad-soft);
+            box-shadow: inset 0 0 0 1px var(--bad-ring);
+            user-select: none;
+        }
+
+        /* Right word, wrong harakat: a hint, not an error. */
+        .mw.is-pronounce {
+            text-decoration: underline dotted var(--warn);
+            text-underline-offset: 4px;
+        }
+
+        .mw__heard {
+            display: inline-flex;
+            gap: 4px;
+            align-items: center;
+            margin-inline-start: 6px;
+            padding: 1px 8px;
+            border-radius: 999px;
+            background: var(--surface-3);
+            color: var(--bad);
+            font-family: var(--font-ar);
+            font-size: 0.72em;
+            font-weight: 600;
+            vertical-align: 0.12em;
+        }
+
+        .mw.is-current {
+            outline: 2px solid var(--accent-ring);
+            outline-offset: 2px;
+        }
+
+        .mw.is-flash {
+            animation: mw-flash 900ms ease;
+        }
+
+        @keyframes mw-flash {
+            0% {
+                background: var(--accent-soft);
+            }
+
+            100% {
+                background: transparent;
+            }
+        }
+
+        /* ------------------------------------------------------------------
+           Bottom control bar
+        ------------------------------------------------------------------ */
+        .mic-bar {
+            position: fixed;
+            z-index: 35;
+            inset-inline: 0;
+            bottom: 0;
+            padding-bottom: env(safe-area-inset-bottom);
+            background: var(--appbar);
+            border-top: 1px solid var(--border);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+        }
+
+        .mic-bar__inner {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            width: min(100% - 24px, 1180px);
+            margin: 0 auto;
+            padding: 10px 0;
+        }
+
+        .mic-button {
+            display: grid;
+            flex: 0 0 auto;
+            place-items: center;
+            width: 54px;
+            height: 54px;
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 999px;
+            background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+            color: var(--on-accent);
+            box-shadow: 0 10px 22px var(--accent-soft);
+            -webkit-tap-highlight-color: transparent;
+            transition: transform 120ms ease, box-shadow 160ms ease, background-color 160ms ease;
+        }
+
+        .mic-button:active {
+            transform: scale(0.96);
+        }
+
+        .mic-button:focus-visible {
+            outline: 2px solid var(--accent-ring);
+            outline-offset: 2px;
+        }
+
+        .mic-button[disabled] {
+            opacity: 0.45;
+            cursor: progress;
+        }
+
+        .mic-button svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        .mic-button .icon-stop {
+            display: none;
+        }
+
+        .mic-button.is-listening {
+            background: linear-gradient(180deg, var(--bad), #a23c3c);
+            color: #fff;
+            animation: mic-pulse 2.2s ease-in-out infinite;
+        }
+
+        .mic-button.is-listening .icon-mic {
+            display: none;
+        }
+
+        .mic-button.is-listening .icon-stop {
+            display: block;
+        }
+
+        @keyframes mic-pulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 var(--bad-soft);
+            }
+
+            50% {
+                box-shadow: 0 0 0 10px rgba(217, 96, 96, 0.02);
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .mic-button.is-listening {
+                animation: none;
+            }
+
+            .mw.is-flash {
+                animation: none;
+            }
+        }
+
+        .mic-status {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+
+        .mic-status__text {
+            overflow: hidden;
+            margin: 0 0 5px;
+            color: var(--text);
+            font-family: var(--font-ar);
+            font-size: 0.95rem;
+            font-weight: 600;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .mic-status__heard {
+            overflow: hidden;
+            margin: 0 0 5px;
+            color: var(--accent);
+            font-family: var(--font-ar);
+            font-size: 0.82rem;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .meter {
+            height: 4px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: var(--surface-3);
+        }
+
+        .meter__fill {
+            width: 0%;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(to left, var(--accent), var(--accent-strong));
+            transition: width 90ms linear;
+        }
+
+        .mic-actions {
+            display: flex;
+            flex: 0 0 auto;
+            gap: 8px;
+            align-items: center;
+        }
+
+        /* ------------------------------------------------------------------
+           Settings panel
+        ------------------------------------------------------------------ */
+        .settings-panel {
+            position: fixed;
+            z-index: 40;
+            inset-inline-end: 12px;
+            bottom: calc(84px + env(safe-area-inset-bottom));
+            width: min(320px, calc(100vw - 24px));
+            max-height: min(60vh, 420px);
+            padding: 14px;
+            overflow-y: auto;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .settings-panel__title {
+            margin: 0 0 10px;
+            color: var(--accent);
+            font-family: var(--font-ar);
+            font-size: 1.05rem;
+            font-weight: 700;
+        }
+
+        .setting {
+            display: grid;
+            gap: 4px;
+            margin-bottom: 12px;
+        }
+
+        .setting__label {
+            color: var(--text-dim);
+            font-family: var(--font-ar);
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .setting__hint {
+            color: var(--muted);
+            font-family: var(--font-ar);
+            font-size: 0.78rem;
+            line-height: 1.5;
+        }
+
+        .segmented {
+            display: inline-flex;
+            padding: 3px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--surface-2);
+        }
+
+        .segmented label {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 32px;
+            padding: 4px 12px;
+            border-radius: 8px;
+            color: var(--muted);
+            font-family: var(--font-ar);
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .segmented input {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .segmented label.is-selected {
+            background: var(--accent);
+            color: var(--on-accent);
+        }
+
+        .setting .select {
+            width: 100%;
+            max-width: none;
+        }
+
+        .setting--row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+
+        .switch input {
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        /* ------------------------------------------------------------------
+           Notice + toast
+        ------------------------------------------------------------------ */
+        .notice {
+            width: min(100% - 24px, 860px);
+            margin: 10px auto 0;
+            padding: 10px 14px;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            background: var(--accent-soft);
+            color: var(--text-dim);
+            font-family: var(--font-ar);
+            font-size: 0.92rem;
+            line-height: 1.7;
+        }
+
+        .toast {
+            position: fixed;
+            z-index: 60;
+            inset-inline: 0;
+            bottom: calc(120px + env(safe-area-inset-bottom));
+            width: fit-content;
+            max-width: min(92vw, 460px);
+            margin: 0 auto;
+            padding: 10px 16px;
+            border: 1px solid var(--border-strong);
+            border-radius: 999px;
+            background: var(--surface-3);
+            color: var(--text);
+            font-family: var(--font-ar);
+            font-size: 0.95rem;
+            box-shadow: var(--shadow);
+            opacity: 0;
+            transform: translateY(8px);
+            pointer-events: none;
+            transition: opacity 200ms ease, transform 200ms ease;
+        }
+
+        .toast.is-visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* ------------------------------------------------------------------
+           Small screens
+        ------------------------------------------------------------------ */
+        @media (max-width: 700px) {
+            .appbar__inner {
+                gap: 8px;
+            }
+
+            .range-controls {
+                order: 3;
+                width: 100%;
+                gap: 6px 10px;
+            }
+
+            .select {
+                max-width: 9.5rem;
+            }
+
+            .num-input {
+                width: 3.6rem;
+            }
+
+            .field__label {
+                font-size: 0.8rem;
+            }
+
+            #maincontent {
+                width: calc(100% - 20px);
+                margin-bottom: 190px;
+            }
+
+            .ayah {
+                scroll-margin-top: 210px;
+            }
+
+            .mic-bar__inner {
+                flex-wrap: wrap;
+                gap: 8px 12px;
+                padding: 8px 0;
+            }
+
+            .mic-actions {
+                order: 3;
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .mic-actions .btn {
+                flex: 1 1 auto;
+                justify-content: center;
+            }
+
+            .settings-panel {
+                inset-inline: 12px;
+                width: auto;
+            }
+        }
+
+        @media (max-width: 380px) {
+            .btn {
+                padding: 7px 9px;
+                font-size: 0.88rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header id="button-container" class="appbar">
+        <div class="appbar__inner">
+            <div class="view-switch" role="group" aria-label="التنقل بين القارئ والمصحف والحفظ">
+                <a class="view-switch__option" id="reader-link" href="../index.html"
+                    title="فتح القارئ: النص العثماني مع التفاسير والترجمات والبحث">القارئ</a>
+                <a class="view-switch__option" id="mushaf-link" href="../index2.html"
+                    title="فتح المصحف: الصفحات المطبوعة، كل كلمة فيها رسم متجهي">المصحف</a>
+                <span class="view-switch__option is-active" aria-current="page">الحفظ</span>
+            </div>
+
+            <div class="range-controls">
+                <label class="field">
+                    <span class="field__label">السورة</span>
+                    <span class="select-wrap">
+                        <select id="surah-select" class="select" aria-label="اختر السورة" disabled>
+                            <option value="">جارٍ التحميل…</option>
+                        </select>
+                    </span>
+                </label>
+                <label class="field">
+                    <span class="field__label">من آية</span>
+                    <input id="from-input" class="num-input" type="text" inputmode="numeric" value="1"
+                        aria-label="من الآية" disabled>
+                </label>
+                <label class="field">
+                    <span class="field__label">إلى آية</span>
+                    <input id="to-input" class="num-input" type="text" inputmode="numeric" value="7"
+                        aria-label="إلى الآية" disabled>
+                </label>
+                <button id="apply-button" class="btn" type="button" disabled>عرض</button>
+            </div>
+
+            <button id="theme-toggle" class="btn" type="button" aria-label="Switch to light mode"
+                title="تفعيل الوضع النهاري">
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>
+                </svg>
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="4"></circle>
+                    <path
+                        d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5">
+                    </path>
+                </svg>
+                <span class="sr-only">THEME</span>
+            </button>
+        </div>
+    </header>
+
+    <div id="mic-support-notice" class="notice" hidden>
+        الاستماع يعمل بمحرّك تعرّف محلي داخل المتصفح (نموذج مُدرَّب على تلاوات القرآن الكريم).
+        يُحمَّل النموذج مرة واحدة عند أول استخدام (١٠٠–٢٠٠ ميغابايت حسب الجهاز)، ثم يعمل كل شيء
+        دون اتصال وبخصوصية كاملة: صوتك وتلاوتك لا يُرسلان إلى أي جهة. وإن فضّلت، يمكنك التدريب
+        باللمس: اضغط على أي كلمة مخفية لإظهار أول حرف، ثم اضغطها مرة أخرى لإظهارها كاملة.
+    </div>
+
+    <div id="maincontent">
+        <p class="empty">جارٍ تحميل النص القرآني...</p>
+    </div>
+
+    <div id="mic-bar" class="mic-bar">
+        <div class="mic-bar__inner">
+            <button id="mic-toggle" class="mic-button" type="button" aria-label="بدء الاستماع" aria-pressed="false"
+                disabled>
+                <svg class="icon-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="2.5" width="6" height="11.5" rx="3"></rect>
+                    <path d="M5 11.5a7 7 0 0 0 14 0"></path>
+                    <path d="M12 18.5V22"></path>
+                    <path d="M8.5 22h7"></path>
+                </svg>
+                <svg class="icon-stop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <rect x="7" y="7" width="10" height="10" rx="2"></rect>
+                </svg>
+            </button>
+
+            <div class="mic-status">
+                <p id="status-text" class="mic-status__text" role="status" aria-live="polite">جارٍ التحميل…</p>
+                <p id="heard-text" class="mic-status__heard" hidden></p>
+                <div class="meter" aria-hidden="true">
+                    <div id="meter-fill" class="meter__fill"></div>
+                </div>
+            </div>
+
+            <div class="mic-actions">
+                <button id="settings-toggle" class="btn" type="button" aria-expanded="false"
+                    aria-controls="settings-panel">الإعدادات</button>
+                <button id="reveal-all" class="btn" type="button" disabled>إظهار الكل</button>
+                <button id="reset-button" class="btn" type="button" disabled>من جديد</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-panel" class="settings-panel" hidden aria-label="إعدادات الحفظ">
+        <h2 class="settings-panel__title">إعدادات الجلسة</h2>
+
+        <div class="setting">
+            <span class="setting__label">طريقة التصحيح عند الخطأ</span>
+            <div class="segmented" role="radiogroup" aria-label="طريقة التصحيح">
+                <label id="feedback-direct-label"><input type="radio" name="feedback" value="direct"
+                        checked>فوري</label>
+                <label id="feedback-hint-label"><input type="radio" name="feedback" value="hint">تلميح أولًا</label>
+            </div>
+            <span class="setting__hint">«فوري»: تظهر الكلمة الصحيحة فور ملاحظة الخطأ. «تلميح أولًا»: يظهر أول حرف
+                فقط حتى تعيد المحاولة.</span>
+        </div>
+
+        <div class="setting">
+            <span class="setting__label">حساسية المطابقة</span>
+            <select id="strictness-select" class="select" aria-label="حساسية المطابقة">
+                <option value="lenient">متساهلة — تسامح أكبر مع النطق</option>
+                <option value="balanced" selected>متوازنة — الوضع الموصى به</option>
+                <option value="strict">صارمة — تدقيق أقرب</option>
+            </select>
+            <span class="setting__hint">تتحكم في مقدار الفرق المسموح قبل اعتبار الكلمة خطأً.</span>
+        </div>
+
+        <div class="setting">
+            <span class="setting__label">شكل النص قبل التلاوة</span>
+            <select id="hide-mode-select" class="select" aria-label="شكل النص">
+                <option value="hidden" selected>إخفاء كامل</option>
+                <option value="blur">ضباب خفيف</option>
+            </select>
+        </div>
+
+        <div class="setting setting--row">
+            <span class="setting__label">تتبع الكلمة الحالية تلقائيًا</span>
+            <label class="switch">
+                <input id="autoscroll-check" type="checkbox" checked>
+                <span class="sr-only">تتبع الكلمة الحالية</span>
+            </label>
+        </div>
+    </div>
+
+    <script src="memorize-core.js"></script>
+    <script src="memorize-asr.js"></script>
+    <script src="memorize.js"></script>
+    <script src="../pwa.js"></script>
+</body>
+
+</html>

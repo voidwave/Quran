@@ -1,5 +1,5 @@
 /**
- * Shared PWA glue for index.html and index2.html:
+ * Shared PWA glue for the app pages (reader, mushaf, memorisation):
  *
  *   - registers sw.js, which makes the app installable and keeps it working
  *     offline (see sw.js for what is cached and when);
@@ -15,9 +15,15 @@
        Service worker
     ----------------------------------------------------------------------- */
 
+    /* The worker sits next to this script: resolve it from the script's own
+       location (not from the page) so pages in subfolders — e.g.
+       QuranHifz/memorize.html — register the same worker at the app root. */
+    var SCRIPT_SRC = (document.currentScript && document.currentScript.src) || 'pwa.js';
+    var SW_URL = new URL('sw.js', SCRIPT_SRC).href;
+
     if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
         window.addEventListener('load', function () {
-            navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+            navigator.serviceWorker.register(SW_URL, { updateViaCache: 'none' })
                 .catch(function (error) {
                     console.warn('Service worker registration failed:', error);
                 });

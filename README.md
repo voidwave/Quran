@@ -17,6 +17,7 @@ A free and open web app for reading and listening to the Holy Quran: full Uthman
 - 📖 **Full Quran text** — Uthmani script for reading, with a diacritic-free copy used for search.
 - 📚 **Multiple sources** — toggle any number of tafsirs and translations; each ayah shows one block per selected source in the order you picked them.
 - 🎧 **Verse-by-verse audio** — several reciters, click any ayah to play it, plus continuous play that moves automatically through the ayahs and surahs.
+- 🧠 **Memorisation mode (الحفظ)** — pick a surah and an ayah range, then recite from memory: the text stays hidden and each word reveals as you recite it, mistakes are highlighted and corrected. Live listening uses the browser's speech recognition (Chrome, Edge and Safari with internet); without it the page becomes a tap-to-reveal practice board.
 - 🔍 **Search** — search the whole Quran (from 3 letters, debounced), with results rendered in pages so common words stay fast.
 - 🎲 **Random ayah / random surah** — jump to a random place in the Quran with one click.
 - 🌙 **Dark & light themes** — remembered between visits.
@@ -67,6 +68,13 @@ pwa.js                              # service worker registration + install butt
 resume.js                           # shared: the view and place to come back to (localStorage)
 offline.js                          # shared: downloads the content / one reciter for offline use
 sw.js                               # service worker: offline caching
+QuranHifz/                          # memorisation view ("الحفظ") + its ASR engines and dev tools
+  memorize.html                     # the page: recite from memory, words revealed as matched
+  memorize.js                       # its logic: rendering, practice mode, live recognition
+  memorize-core.js                  # pure matching logic (normalizer, alignment, tracker)
+  memorize-asr.js                   # on-device recognition engine (Whisper-Basira, WebGPU/WASM)
+  memorize-asr-worker.js            # recognition worker (transformers.js + onnxruntime)
+  tools/                            # dev tools: speech-spike.html, engine wrappers, model files
 icons/                              # app icons (install / home screen)
 QuranText/
   Quran/                            # Tanzil Quran text XML files
@@ -106,6 +114,9 @@ node tools/build-mushaf-pages.mjs 18
 # rebuild the verse -> page index the two views use to swap places
 # (a whole-Quran build writes it too; this one needs no network)
 node tools/build-verse-pages.mjs
+
+# run the memorisation matcher's fixture tests (no browser needed)
+node QuranHifz/tools/test-memorize-core.mjs
 ```
 
 ---
@@ -118,13 +129,24 @@ node tools/build-verse-pages.mjs
 - The words of a printed line are spread over the full page width, so the text breaks exactly where the printed page breaks (15 lines a page, two of which a surah banner takes). The glyph size follows the sheet proportion of the print, so every page of the Quran is laid out identically.
 - The real ʿUthmānī word is kept behind every glyph: selection stops at word boundaries, and the copy handler puts the real words on the clipboard — copying gives you `ٱلْحَمْدُ لِلَّهِ ٱلَّذِىٓ أَنزَلَ`, never code points.
 - Scrolling is endless in both directions, on desktop and on mobile: pages are drawn only while they are near the viewport, so carrying the whole Quran on one scroll costs no extra memory.
-- The view switch (**القارئ / المصحف**) moves between this page and the app around the same verse: the Mushaf opens on the page the verse is printed on and puts its line at the top, and the reader opens on the same ayah, marked with a short flash. `resume.js` remembers the view that was used last, so the installed app comes back to it — the reader on the ayah it was on, the Mushaf on its page and line — and a reload of either page comes back to the line it was left on.
+- The view switch (**القارئ / المصحف / الحفظ**) moves between the pages around the same verse: the Mushaf opens on the page the verse is printed on and puts its line at the top, the reader opens on the same ayah, marked with a short flash, and the memorisation view keeps its own surah/ayah range. `resume.js` remembers the view that was used last, so the installed app comes back to it — the reader on the ayah it was on, the Mushaf on its page and line — and a reload of either page comes back to the line it was left on.
 - Dark and light themes cover the pages themselves: dark paper with light ink in the dark theme (a word is a vector outline, so only the paper and the ink change) and cream paper with dark ink in the light theme; switching the theme also recolours the pages already on screen, with no redraw.
 - The app bar keeps only what reading needs — the surah picker, the page pager, the listen button and the القارئ/المصحف switch — and tucks the reciter picker, the random surah and the theme into a tools menu on small screens (on wide ones they stay inline). It also slides away by itself a couple of seconds after you stop scrolling, and returns on the next scroll, touch or hover.
 - Pressing **التلاوة** recites from the verse you have selected (or from the word whose card is open), and from the first verse of the page when nothing is selected. Every surah banner carries its own small play button that recites that surah from its first ayah. Both use the same `QuranAudio/` files and reciters as the app: the recited verse is highlighted, the view follows the recitation from page to page, each surah is opened with its basmala (surah 9 has none) and a missing file is skipped with a message, exactly like `index.js`.
 - A word's meaning, transliteration and recitation are one click away.
 
 `node tools/build-mushaf-pages.mjs all` fetches every printed page — its words, glyph code points, printed line numbers, real text and word audio — into `QuranText/MushafPages/` (around 93 MB of page fonts, a few minutes). Pass a chapter number instead to build just that chapter while developing. The fonts belong to the King Fahd Complex (served through quran.com) and are downloaded here for local development — check the [QUL](https://qul.tarteel.ai) licence before publishing.
+
+---
+
+## 🧠 Memorisation mode
+
+`QuranHifz/memorize.html` is the third view next to the reader and the Mushaf. Pick a surah and the ayah range you want to practise, press the microphone and start reciting: every word stays hidden until it is recognised, wrong or skipped words are highlighted with the correct text, and the page keeps its place when you repeat, jump ahead or start the passage over.
+
+- **How the matching works** — the verse text is known in advance, so the page never has to transcribe you perfectly: `memorize-core.js` folds the expected words and the recognised ones to diacritic-free Arabic, scores word pairs with the Levenshtein distance and aligns the heard sequence to the text with a modified Needleman-Wunsch pass (the approach Tarteel-style recitation trackers use). An omitted word becomes "unclear", a wrong word is shown together with what was heard, and a jump to another place in the range is found with a full-range search. `node QuranHifz/tools/test-memorize-core.mjs` runs the fixture scenarios — skipped words, wrong words, repeats, jumps, noise — without a browser.
+- **Speech recognition** — live listening uses the Web Speech API with `ar-SA`. In Chrome and Edge the audio is processed by the browser vendor's speech service, so it needs an internet connection and users should be told before the microphone opens; Safari supports it too, Firefox does not implement it.
+- **Practice without a microphone** — everywhere else, and offline, the same page is a practice board: tap a hidden word to see its first letter, tap it again to reveal it fully.
+- **Settings** — correction style (show the word right away, or a first-letter hint first), matching strictness, hide mode (fully hidden or softly blurred) and automatic following of the current word; all kept in `localStorage` under `quran-memorize`.
 
 ---
 
@@ -157,6 +179,7 @@ Deploying works as usual (copy the folder): the browser picks new files up on th
 - 📖 **نص القرآن كامل** — بالرسم العثماني للقراءة، ونسخة مُجرّدة من التشكيل لأغراض البحث.
 - 📚 **مصادر متعددة** — اختر أي عدد من التفاسير والترجمات، ويظهر لكل آية قسم لكل مصدر محدَّد بترتيب اختيارك.
 - 🎧 **تلاوة آية بآية** — عدة قرّاء، اضغط على أي آية لتشغيلها، مع تشغيل متواصل ينتقل تلقائيًا بين الآيات والسور.
+- 🧠 **وضع الحفظ** — اختر سورة ونطاق آيات ثم اتلُ من حفظك: يبقى النص مخفيًا وتُكشف الكلمات كلمةً كلمة مع تلاوتك، وتُبرَز الأخطاء وتُصحَّح. يعمل الاستماع المباشر بتعرّف الصوت في المتصفح (Chrome وEdge وSafari مع اتصال بالإنترنت)، وفي غيرها تتحول الصفحة إلى لوحة تدريب باللمس.
 - 🔍 **البحث** — ابحث في القرآن كاملًا (من ثلاثة أحرف فأكثر)، وتُعرض النتائج على صفحات ليبقى البحث سريعًا.
 - 🎲 **آية عشوائية / سورة عشوائية** — انتقل إلى موضع عشوائي من القرآن بضغطة واحدة.
 - 🌙 **الوضع الليلي والنهاري** — مع تذكّر اختيارك بين الزيارات.
@@ -200,6 +223,13 @@ index.html                          # التطبيق (الواجهة والأن�
 index.js                            # منطق التطبيق: النص والمصادر والبحث والصوت
 index2.html                         # عرض المصحف (٦٠٤ صفحات في تمرير واحد)
 index2.js                           # منطقها: طبقة الرسوم والتوزيع والنسخ والتمرير اللانهائي
+QuranHifz/                          # عرض الحفظ ومحرّكات التعرّف عليه
+  memorize.html                     # الصفحة: اتلُ من حفظك وتُكشف الكلمات
+  memorize.js                       # منطقه: العرض ووضع التدريب والاستماع المباشر
+  memorize-core.js                  # منطق المطابقة الصافي (التطبيع والموازنة والمتابعة)
+  memorize-asr.js                   # محرّك التعرّف على الجهاز (Whisper-Basira، WebGPU/WASM)
+  memorize-asr-worker.js            # عامل التعرّف (transformers.js + onnxruntime)
+  tools/                            # أدوات التطوير: speech-spike.html والمحرّكات والملفات
 manifest.webmanifest                # ملف تعريف التطبيق (الاسم والألوان والأيقونات)
 pwa.js                              # تسجيل عامل الخدمة وزر التثبيت
 sw.js                               # عامل الخدمة: التخزين للعمل دون اتصال
@@ -233,13 +263,22 @@ tools/
 - تُوزَّع كلمات كل سطر مطبوع على عرض الصفحة كاملًا، فينكسر النص حيث ينكسر في المطبوع (١٥ سطرًا للصفحة، يشغل سطران منها ترويسة السورة)، وحجم الرسم يتبع نسبة الصفحة في المطبوع فتتساوى صفحات القرآن في التنسيق.
 - النص العثماني الحقيقي محفوظ خلف كل رسمة: يقف التحديد عند حدود الكلمة، وعند النسخ تُستبدل الرسوم بالكلمات الحقيقية — فتحصل على `ٱلْحَمْدُ لِلَّهِ ٱلَّذِىٓ أَنزَلَ` لا على رموز الخط.
 - التمرير متصل في الاتجاهين، على الحاسوب والجوال: لا تُرسم الصفحة إلا وهي قريبة من نافذة العرض، فحمل المصحف كاملًا في تمرير واحد لا يستهلك ذاكرة إضافية.
-- مفتاح التنقل (**القارئ / المصحف**) ينقلك بين هذه الصفحة و`index.html` مع حفظ موضعك: يفتح المصحف على أول صفحة للسورة (`index2.html#s18`)، ويفتح القارئ تلك السورة (`index.html?surah=18`)، ويحفظ القارئ السورة في شريط العنوان فيعود إليها بعد إعادة التحميل.
+- مفتاح التنقل (**القارئ / المصحف / الحفظ**) ينقلك بين هذه الصفحة و`index.html` مع حفظ موضعك: يفتح المصحف على أول صفحة للسورة (`index2.html#s18`)، ويفتح القارئ تلك السورة (`index.html?surah=18`)، ويحفظ القارئ السورة في شريط العنوان فيعود إليها بعد إعادة التحميل. أما صفحة الحفظ فتحفظ هي سورتها ونطاق آياتها.
 - الوضع الليلي والنهاري يشمل الصفحات نفسها: ورق داكن بحبر فاتح في الوضع الليلي (الكلمة رسم متجهي، فلا يتغير إلا الورق والحبر)، وورق كريمي بحبر داكن في الوضع النهاري؛ وتبديل الوضع يُعيد تلوين الصفحات المعروضة فورًا دون إعادة رسم.
 - شريط الأدوات لا يحمل إلا ما تحتاجه القراءة — قائمة السور، والسابق والتالي، وزر التلاوة، ومفتاح القارئ/المصحف — ويجمع اختيار القارئ والسورة العشوائية والوضع الليلي في قائمة أدوات على الشاشات الصغيرة (وتبقى ظاهرة على الشاشات الواسعة). كما يختفي الشريط وحده بعد ثوانٍ من توقّف التمرير، ويعود مع أول تمرير أو لمس أو مرور بالمؤشر.
 - زر **التلاوة** يقرأ من الآية التي حدّدتها (أو من الكلمة المفتوحة)، ومن أول آية في الصفحة إن لم يكن هناك تحديد. وفي ترويسة كل سورة زر تشغيل صغير يقرأ تلك السورة من أولها. وكلاهما بملفات `QuranAudio/` وقرّائها نفسهم: تُبرز الآية الجارية، ويتابع العرض التلاوة من صفحة إلى صفحة، وتُفتتح كل سورة ببسملتها (ولا بسملة لسورة التوبة)، ويُتخطّى الملف المفقود مع تنبيه — تمامًا كسلوك `index.js`.
 - معنى الكلمة ونقلها الصوتي وتلاوتها بضغطة واحدة.
 
 يبني الأمر `node tools/build-mushaf-pages.mjs all` كل الصفحات المطبوعة — كلماتها ورموز خطوطها وأرقام أسطرها ونصها الحقيقي وصوتها — في `QuranText/MushafPages/` (نحو ٩٣ ميغابايت من خطوط الصفحات، في بضع دقائق). ويمكن تمرير رقم سورة لبناء سورة واحدة أثناء التطوير. هذه الخطوط ملك لمجمّع الملك فهد (تُقدَّم عبر quran.com)، ونُزِّلت هنا للتجربة المحلية — فراجع رخصة [QUL](https://qul.tarteel.ai) قبل النشر.
+
+## 🧠 وضع الحفظ
+
+`QuranHifz/memorize.html` هو العرض الثالث بجانب القارئ والمصحف. اختر السورة ونطاق الآيات، ثم اضغط الميكروفون وابدأ التلاوة: تبقى كل كلمة مخفية حتى تُتلى، وتُبرَز الكلمة الخطأ مع النص الصحيح، ويتابع الموضع تلقائيًا مع التكرار أو الانتقال أو البدء من جديد.
+
+- **كيف تُطابَق الكلمات** — النص معروف مسبقًا، فلا حاجة إلى نسخ صوتي مثالي: يوحّد `memorize-core.js` الكلمات المتوقعة والكلمات المسموعة إلى عربية بلا تشكيل، ويقيس التشابه بمسافة ليفنشتاين، ثم يوازن التسلسل المسموع مع النص بخوارزمية نيدلمان-فونش معدّلة (الطريقة نفسها التي تستخدمها تطبيقات متابعة التلاوة). الكلمة المتروكة تُعلَّم «غير مؤكدة»، والكلمة الخطأ تُعرض مع ما سُمع، والانتقال إلى موضع آخر يُكتشف ببحث في النطاق كاملًا. واختبارات `node QuranHifz/tools/test-memorize-core.mjs` تغطي هذه الحالات كلها دون متصفح.
+- **التعرّف على الصوت** — يستخدم الاستماع المباشر واجهة Web Speech API بصوت عربي (`ar-SA`). في Chrome وEdge تُعالَج المقاطع عبر خدمة المتصفح السحابية، فيلزم اتصال بالإنترنت ويُستحسن تنبيه المستخدم قبل فتح الميكروفون؛ وSafari يدعمها كذلك، أما Firefox فلا يدعمها.
+- **التدريب بلا ميكروفون** — في أي متصفح ودون اتصال، تعمل الصفحة كلوحة تدريب: اضغط الكلمة المخفية لإظهار أول حرف، واضغطها ثانية لإظهارها كاملة.
+- **الإعدادات** — طريقة التصحيح (فوري أو تلميح أولًا)، وحساسية المطابقة، وشكل النص (إخفاء كامل أو ضباب خفيف)، والتتبع التلقائي للكلمة الحالية؛ وتُحفظ في `localStorage` تحت `quran-memorize`.
 
 ## 📲 تثبيت التطبيق (PWA)
 

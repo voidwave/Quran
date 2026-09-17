@@ -28,12 +28,13 @@
  * is deleted on activate. The data/audio caches survive version bumps.
  */
 
-const VERSION = 'v3';
+const VERSION = 'v8';
 
 const SHELL_CACHE = 'quran-shell-' + VERSION;
 const DATA_CACHE = 'quran-data';
 const AUDIO_CACHE = 'quran-audio';
 const FONT_CACHE = 'quran-webfonts';
+const ASR_CACHE = 'quran-asr';
 const META_CACHE = 'quran-meta';
 
 /* The app shell: small files that must be there for a cold offline start. */
@@ -46,6 +47,13 @@ const SHELL_FILES = [
     'pwa.js',
     'resume.js',
     'offline.js',
+    'QuranHifz/memorize.html',
+    'QuranHifz/memorize.js',
+    'QuranHifz/memorize-core.js',
+    'QuranHifz/memorize-asr.js',
+    'QuranHifz/memorize-asr-worker.js',
+    'QuranHifz/ort-nemo-asr.js',
+    'QuranHifz/ort-nemo-asr-worker.js',
     'manifest.webmanifest',
     'icons/icon-192.png',
     'icons/icon-512.png',
@@ -72,6 +80,13 @@ const SHELL_SUFFIXES = [
     '/pwa.js',
     '/resume.js',
     '/offline.js',
+    '/QuranHifz/memorize.html',
+    '/QuranHifz/memorize.js',
+    '/QuranHifz/memorize-core.js',
+    '/QuranHifz/memorize-asr.js',
+    '/QuranHifz/memorize-asr-worker.js',
+    '/QuranHifz/ort-nemo-asr.js',
+    '/QuranHifz/ort-nemo-asr-worker.js',
     '/manifest.webmanifest',
     '/icons/icon-192.png',
     '/icons/icon-512.png',
@@ -129,7 +144,7 @@ async function precache() {
 
 self.addEventListener('activate', event => {
     event.waitUntil((async () => {
-        const alive = new Set([SHELL_CACHE, DATA_CACHE, AUDIO_CACHE, FONT_CACHE, META_CACHE]);
+        const alive = new Set([SHELL_CACHE, DATA_CACHE, AUDIO_CACHE, FONT_CACHE, ASR_CACHE, META_CACHE]);
         for (const name of await caches.keys()) {
             if (name.startsWith('quran-') && !alive.has(name)) {
                 await caches.delete(name);
@@ -155,11 +170,24 @@ self.addEventListener('fetch', event => {
     const url = new URL(request.url);
     if (url.origin !== self.location.origin) {
         /* The Google fonts the pages link: cache them so the offline pages
-         * keep their typeface. Everything else cross-origin (the
-         * word-by-word audio, the flags) goes straight to the network. */
+         * keep their typeface. The jsDelivr runtime of the on-device speech
+         * engine (transformers.js + onnxruntime wasm) is cached the same way
+         * so the engine keeps working offline after the first use. The model
+         * weights are cached by transformers.js in its own store. Everything
+         * else cross-origin (the word-by-word audio, the flags) goes straight
+         * to the network. */
         if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
             respondStaleWhileRevalidate(event, FONT_CACHE);
+        } else if (url.hostname === 'cdn.jsdelivr.net') {
+            respondStaleWhileRevalidate(event, ASR_CACHE);
         }
+        return;
+    }
+
+    /* The ASR development tools (QuranHifz/tools/speech-spike.html) fetch the
+     * sherpa-onnx wasm runtime and large ONNX model files: they are dev-only,
+     * not part of the offline app, and must never enter the caches. */
+    if (url.pathname.includes('/tools/')) {
         return;
     }
 
