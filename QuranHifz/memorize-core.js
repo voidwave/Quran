@@ -94,12 +94,13 @@
         word = word.replace(/\uFDF2/g, ' الله ');
         word = word.replace(/[\uFDFA\uFDFB]/g, ' ');
 
-        // Diacritics, the dagger (superscript) alef, tatweel, Quranic
-        // annotation marks and honorific marks all go. Modern spellings —
-        // what recognizers write — either keep the long vowel as ا
-        // ("العالمين" vs "العلمين": one letter, still a strong match) or
-        // drop it entirely ("ذلك", "الرحمن").
-        word = word.replace(/[\u0640\u0670\u064B-\u065F\u0610-\u061A\u06D6-\u06ED]/g, '');
+        // The dagger (superscript) alef is the Uthmani way of writing a long
+        // alef — it counts as a full alef in every case ("ٱلسَّمَـٰوَٰتِ" →
+        // السماوات, "مَـٰلِكِ" → مالك). The rest of the diacritics, tatweel,
+        // Quranic annotation marks and honorific marks all go; modern
+        // spellings — what recognizers write — then match exactly.
+        word = word.replace(/\u0670/g, 'ا');
+        word = word.replace(/[\u0640\u064B-\u065F\u0610-\u061A\u06D6-\u06ED]/g, '');
 
         // Uniform letter shapes.
         word = word.replace(/[\u0622\u0623\u0625\u0671-\u0673\u0675]/g, 'ا');
@@ -247,31 +248,30 @@
         if (heard === expected) {
             return 1;
         }
+
+        // Alef insertions or drops are spelling conventions, not word
+        // differences: the Uthmani print keeps long vowels as dagger marks
+        // ("مَـٰلِكِ" → ملك، "صِرَٰطَ" → صرط) while recognizers write full
+        // alefs ("مالك"، "صراط") — and several words carry TWO of them
+        // ("ٱلسَّمَـٰوَٰتِ" → السموت vs "السماوات"). Identical once every alef
+        // is stripped, from three letters up ("قال"/"قل" are real words),
+        // means the same word was said.
+        const heardBare = heard.replace(/ا/g, '');
+        const expectedBare = expected.replace(/ا/g, '');
+        if (heardBare === expectedBare
+            && Math.min(heard.length, expected.length) >= 3
+            && Math.abs(heard.length - expected.length) <= 2) {
+            return 0.86;
+        }
+
         const longest = Math.max(heard.length, expected.length);
         const distance = levenshtein(heard, expected);
         const budget = longest <= 2 ? 0 : (longest <= 8 ? 1 : 2);
         if (distance > budget) {
             return 0;
         }
-        const score = 1 - distance / longest;
 
-        // A lone Alef inserted or dropped is a spelling convention — the
-        // Uthmani print keeps the long vowel as a dagger mark ("مَـٰلِكِ",
-        // "صِرَٰطَ") while recognizers write it as ا. Not a word difference…
-        if (score < STRONG_SIM && distance === 1 && Math.abs(heard.length - expected.length) === 1) {
-            const longer = heard.length > expected.length ? heard : expected;
-            const shorter = heard.length > expected.length ? expected : heard;
-            // …but only from three letters up: "قال"/"قل" are real words.
-            if (shorter.length >= 3) {
-                for (let i = 0; i < longer.length; i += 1) {
-                    if (longer.charAt(i) === 'ا' && longer.slice(0, i) + longer.slice(i + 1) === shorter) {
-                        return 0.86;
-                    }
-                }
-            }
-        }
-
-        return score;
+        return 1 - distance / longest;
     }
 
     /* -----------------------------------------------------------------------
@@ -686,6 +686,60 @@
         }
 
         /**
+         * "You are on THIS word": in passages where a word repeats (An-Nas
+         * ends four verses on «الناس») the aligner happily binds a spoken
+         * word to an identical occurrence elsewhere — often EARLIER — and the
+         * chain clamp then stalls at the current word forever. When the first
+         * word the chunk failed to chain is precisely a word the chunk did
+         * say (bent to some other occurrence), re-point that pair at the
+         * blocking word.
+         */
+        function anchorCursorRepeat(pairs, heardWords) {
+            const matched = new Set();
+            pairs.forEach(function (pair) {
+                if (pair.type === 'match') {
+                    matched.add(pair.item);
+                }
+            });
+            let blocker = tracker.cursor;
+            while (blocker < items.length) {
+                if (states[blocker] !== 'pending' || items[blocker].soft || matched.has(blocker)) {
+                    blocker += 1;
+                    continue;
+                }
+                break;
+            }
+            if (blocker >= items.length || items[blocker].meta) {
+                return;
+            }
+            let candidate = null;
+            pairs.forEach(function (pair) {
+                if (candidate || pair.type !== 'match' || pair.item === blocker) {
+                    return;
+                }
+                /* only re-point a match that is NOT needed by the chain
+                   itself: one from behind the cursor, or one bent to some
+                   later occurrence past the blocking word */
+                if (pair.item >= tracker.cursor && pair.item < blocker) {
+                    return;
+                }
+                if (wordScore(heardWords[pair.h], items[blocker].norm) >= opts.strongSim) {
+                    candidate = pair;
+                }
+            });
+            if (candidate) {
+                candidate.item = blocker;
+                /* the word WAS said — drop the contradicting "not heard"
+                   pair the alignment left on the same word */
+                for (let p = pairs.length - 1; p >= 0; p -= 1) {
+                    if (pairs[p] !== candidate && pairs[p].type === 'miss' && pairs[p].item === blocker) {
+                        pairs.splice(p, 1);
+                    }
+                }
+            }
+        }
+
+        /**
          * "Stay on the word you are on": a commitment may only happen in an
          * unbroken run that starts at the current word. The first pending
          * word in the alignment that was not matched blocks everything
@@ -713,6 +767,11 @@
                 return pairs;   // the whole run chains — nothing to hold back
             }
             let beyond = false;
+            pairs.forEach(function (pair) {
+                if (pair.type === 'match' && pair.item > limit) {
+                    beyond = true;
+                }
+            });
             const kept = [];
             pairs.forEach(function (pair) {
                 if (pair.type !== 'match' && pair.type !== 'miss' && pair.type !== 'substitute') {
@@ -728,11 +787,10 @@
                        but keep it pending — it must be read correctly */
                     if (pair.type === 'substitute') {
                         ops.push({ op: 'sub', i: pair.item, heard: heardWords[pair.h] || '' });
-                    } else if (pair.type === 'miss') {
+                    } else if (pair.type === 'miss' && beyond) {
+                        /* only when the reciter actually moved past this word */
                         ops.push({ op: 'miss', i: pair.item });
                     }
-                } else if (pair.type === 'match') {
-                    beyond = true;
                 }
             });
             if (beyond) {
@@ -935,17 +993,24 @@
             const to = Math.min(items.length, tracker.cursor + opts.fwd);
             const result = alignUtterance(heardWords, items, from, to, opts);
             const pairs = pruneWeakMatches(withSubstitutions(result.pairs));
+            /* repeated vocabulary must not steal the match from the word
+               the reciter is actually on */
+            anchorCursorRepeat(pairs, heardWords);
 
             /* Metrics are recomputed from the pruned pairs: a discarded
                soundalike must not inflate confidence and sneak a noise
                chunk past the relocation gate below. */
             let strongCount = 0;
             let matchedHeard = 0;
+            let firstMatched = -1;
             pairs.forEach(function (pair) {
                 if (pair.type === 'match') {
                     matchedHeard += 1;
                     if (pair.score >= opts.strongSim) {
                         strongCount += 1;
+                    }
+                    if (firstMatched === -1 || pair.item < firstMatched) {
+                        firstMatched = pair.item;
                     }
                 } else if (pair.type === 'substitute') {
                     matchedHeard += 1;
@@ -961,7 +1026,7 @@
                hallucinated rhyme word than a real jump: the ASR invents
                soundalike endings all the time. Big claims must carry the
                same evidence a relocation would demand. */
-            const farFirst = result.firstMatched > tracker.cursor + (opts.jumpGuard === undefined ? 2 : opts.jumpGuard);
+            const farFirst = firstMatched > tracker.cursor + (opts.jumpGuard === undefined ? 2 : opts.jumpGuard);
             const solidClaim = strongCount >= opts.searchStrongNeeded && confidence >= 0.5;
 
             if ((!recognized && confidence < opts.searchConf) || (farFirst && !solidClaim)) {

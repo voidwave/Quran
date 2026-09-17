@@ -115,9 +115,10 @@
         const defaults = {
             feedback: 'direct',
             strictness: 'balanced',
-            hideMode: 'hidden',
+            hideMode: 'blur',
             autoScroll: true,
             model: 'int8',
+            viewVersion: 2,
             range: null
         };
         try {
@@ -125,7 +126,15 @@
             if (raw) {
                 const data = JSON.parse(raw);
                 if (data && typeof data === 'object') {
-                    return Object.assign(defaults, data.settings || {}, { range: data.range || null });
+                    const merged = Object.assign(defaults, data.settings || {}, { range: data.range || null });
+                    /* one-time upgrade: 'hidden' used to be the default view —
+                       existing sessions switch to the blurry view once; after
+                       that the setting is respected as-is. */
+                    if ((data.settings || {}).viewVersion !== 2) {
+                        merged.hideMode = 'blur';
+                        merged.viewVersion = 2;
+                    }
+                    return merged;
                 }
             }
         } catch (error) { /* storage unavailable */ }
@@ -140,7 +149,8 @@
                     strictness: settings.strictness,
                     hideMode: settings.hideMode,
                     autoScroll: settings.autoScroll,
-                    model: settings.model
+                    model: settings.model,
+                    viewVersion: 2
                 },
                 range: currentRange
             }));

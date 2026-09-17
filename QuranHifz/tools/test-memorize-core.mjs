@@ -52,10 +52,10 @@ function runTracker(items, chunks, options) {
 
 section('normalization');
 check("normalizeToken('ٱلْحَمْدُ')", core.normalizeToken('ٱلْحَمْدُ') === 'الحمد', core.normalizeToken('ٱلْحَمْدُ'));
-check("normalizeToken('ٱلْعَـٰلَمِينَ')", core.normalizeToken('ٱلْعَـٰلَمِينَ') === 'العلمين', core.normalizeToken('ٱلْعَـٰلَمِينَ'));
-check("normalizeToken('ذَٰلِكَ')", core.normalizeToken('ذَٰلِكَ') === 'ذلك', core.normalizeToken('ذَٰلِكَ'));
-check("normalizeToken('ٱلرَّحْمَـٰنِ')", core.normalizeToken('ٱلرَّحْمَـٰنِ') === 'الرحمن', core.normalizeToken('ٱلرَّحْمَـٰنِ'));
-check("normalizeToken('مُوسَىٰ')", core.normalizeToken('مُوسَىٰ') === 'موسي', core.normalizeToken('مُوسَىٰ'));
+check("normalizeToken('ٱلْعَـٰلَمِينَ')", core.normalizeToken('ٱلْعَـٰلَمِينَ') === 'العالمين', core.normalizeToken('ٱلْعَـٰلَمِينَ'));
+check("normalizeToken('ذَٰلِكَ')", core.normalizeToken('ذَٰلِكَ') === 'ذالك', core.normalizeToken('ذَٰلِكَ'));
+check("normalizeToken('ٱلرَّحْمَـٰنِ')", core.normalizeToken('ٱلرَّحْمَـٰنِ') === 'الرحمان', core.normalizeToken('ٱلرَّحْمَـٰنِ'));
+check("normalizeToken('مُوسَىٰ')", core.normalizeToken('مُوسَىٰ') === 'موسيا', core.normalizeToken('مُوسَىٰ'));
 check("standalone waqf mark → ''", core.normalizeToken('ۛ') === '' && core.normalizeToken('ۖ') === '');
 check('sajda mark and small letters stripped', core.normalizeToken('لَّهُۥ') === 'له', core.normalizeToken('لَّهُۥ'));
 check("tokenize splits and drops marks", JSON.stringify(core.tokenize('لَا رَيْبَ ۛ فِيهِ')) === JSON.stringify(['لا', 'ريب', 'فيه']));
@@ -69,6 +69,15 @@ check('dagger-alef words still match modern spellings',
 check('a lone alef insertion is strong (مالك/ملك، صراط/صرط)',
     core.wordScore('مالك', 'ملك') >= core.STRONG_SIM && core.wordScore('صراط', 'صرط') >= core.STRONG_SIM,
     core.wordScore('مالك', 'ملك') + ', ' + core.wordScore('صراط', 'صرط'));
+check('dagger alefs become alef (ٱلسَّمَـٰوَٰتِ → السماوات, exact score)',
+    core.normalizeToken('ٱلسَّمَـٰوَٰتِ') === 'السماوات'
+    && core.wordScore('السماوات', core.normalizeToken('ٱلسَّمَـٰوَٰتِ')) === 1,
+    core.normalizeToken('ٱلسَّمَـٰوَٰتِ') + ' \u2192 ' + core.wordScore('السماوات', core.normalizeToken('ٱلسَّمَـٰوَٰتِ')));
+check('two alefs dropped is strong too (السموت \u2190 السماوات reversed)',
+    core.wordScore('السموت', 'السماوات') >= core.STRONG_SIM,
+    String(core.wordScore('السموت', 'السماوات')));
+check('three-letter pairs stay protected (قال/قل unchanged)',
+    core.wordScore('قال', 'قل') < core.STRONG_SIM, String(core.wordScore('قال', 'قل')));
 check('قال/قل stays weak (real words)', core.wordScore('قال', 'قل') < core.STRONG_SIM);
 check('المؤمنون vs المجرمون = 0 (real substitution)', core.wordScore('المءمنون', 'المجرمون') === 0);
 check('منهم/منكم = 0.75 (weak band)', (function () {
@@ -107,7 +116,7 @@ const waqfItems = core.buildItems([
 ]);
 check('waqf marks are meta', waqfItems.filter(function (item) { return item.meta; }).length === 2);
 check('norms in order', waqfItems.map(function (item) { return item.norm; }).join(' ')
-    === 'ذلك الكتب لا ريب  فيه  هدي', waqfItems.map(function (item) { return item.norm; }).join(' '));
+    === 'ذالك الكتاب لا ريب  فيه  هدي', waqfItems.map(function (item) { return item.norm; }).join(' '));
 check('word-audio numbering skips meta', waqfItems[waqfItems.length - 1].wbw === 6,
     String(waqfItems[waqfItems.length - 1].wbw));
 const muqItems = core.buildItems([{ s: 2, a: 1, text: 'الٓمٓ' }]);
@@ -262,6 +271,44 @@ section('repeated wrong attempts stay put');
     check('hold feedback surfaced', opsOf(rush, 'hold').length === 1, JSON.stringify(rush));
     tracker.finalize('الله الصمد لم يلد ولم يولد');
     check('finishing it correctly moves on', tracker.done === true, statesOf(tracker));
+}
+
+section('repeated word elsewhere (An-Nas anchor)');
+{
+    // An-Nas ends four verses on «الناس». A lone «الناس» at the CURRENT word
+    // used to align to the EARLIEST identical word (verse 1, already accepted)
+    // and be dismissed as a repeat — the word under the caret never committed.
+    const NAS = [
+        { s: 114, a: 1, text: 'قُلْ أَعُوذُ بِرَبِّ ٱلنَّاسِ' },
+        { s: 114, a: 2, text: 'مَلِكِ ٱلنَّاسِ' },
+        { s: 114, a: 3, text: 'إِلَٰهِ ٱلنَّاسِ' }
+    ];
+    const tracker = core.createTracker(core.buildItems(NAS));
+    tracker.finalize('قل اعوذ برب الناس');
+    check('verse 1 commits', tracker.states.slice(0, 4).join(',') === 'ok,ok,ok,ok', statesOf(tracker));
+    tracker.finalize('ملك');
+    check('ملك commits', tracker.states[4] === 'ok', statesOf(tracker));
+    const ops = tracker.finalize('الناس');
+    check('lone repeated word accepted at the cursor', tracker.states[5] === 'ok', statesOf(tracker));
+    check('not dismissed as a mere repeat', opsOf(ops, 'repeat').length === 0, JSON.stringify(ops));
+    check('cursor moves past verse 2', tracker.cursor === 6, String(tracker.cursor));
+    tracker.finalize('اله');                   // verse 3 begins
+    check('إله commits', tracker.states[6] === 'ok', statesOf(tracker));
+    tracker.finalize('الناس');                 // verse 3 repeats الناس once more
+    check('the next repetition also lands correctly', tracker.states[7] === 'ok', statesOf(tracker));
+    check('cursor at the end of the range', tracker.cursor === 8, String(tracker.cursor));
+}
+{
+    // the two-word chunk must keep working as before
+    const NAS = [
+        { s: 114, a: 1, text: 'قُلْ أَعُوذُ بِرَبِّ ٱلنَّاسِ' },
+        { s: 114, a: 2, text: 'مَلِكِ ٱلنَّاسِ' },
+        { s: 114, a: 3, text: 'إِلَٰهِ ٱلنَّاسِ' }
+    ];
+    const tracker = core.createTracker(core.buildItems(NAS));
+    tracker.finalize('قل اعوذ برب الناس');
+    tracker.finalize('ملك الناس');
+    check('verse 2 commits from a two-word chunk', tracker.states.slice(4, 6).join(',') === 'ok,ok', statesOf(tracker));
 }
 
 section('restart backwards (search reset)');
