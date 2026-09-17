@@ -91,6 +91,22 @@ check('قال/قل is weak, not strong', (function () {
 check('two-letter words require exactness', core.wordScore('ما', 'من') === 0);
 check('levenshtein sanity', core.levenshtein('كتاب', 'كتب') === 1);
 
+section('word endings (ASR confusions)');
+check('الصالحين is rescued as الصالحات', core.wordScore('الصالحين', 'الصالحات') >= core.STRONG_SIM,
+    String(core.wordScore('الصالحين', 'الصالحات')));
+check('صالحه (dropped article) is rescued too', core.wordScore('صالحه', 'الصالحات') >= core.STRONG_SIM,
+    String(core.wordScore('صالحه', 'الصالحات')));
+check('الصالحون counts as well', core.wordScore('الصالحون', 'الصالحات') >= core.STRONG_SIM,
+    String(core.wordScore('الصالحون', 'الصالحات')));
+check('a different stem is not rescued (طالحة)', core.wordScore('طالحة', 'الصالحات') === 0,
+    String(core.wordScore('طالحة', 'الصالحات')));
+check('a different stem is not rescued (الصادقين)', core.wordScore('الصادقين', 'الصالحات') === 0,
+    String(core.wordScore('الصادقين', 'الصالحات')));
+check('a truncated word is not rescued (صالح)', core.wordScore('صالح', 'الصالحات') === 0,
+    String(core.wordScore('صالح', 'الصالحات')));
+check('exact forms are untouched (score 1)', core.wordScore('الصالحات', 'الصالحات') === 1);
+check('rescue never fires for equal words', core.endingRescue('الصالحات', 'الصالحات') === false);
+
 section('pronunciation signatures');
 check('marks collected in order', core.vowelSignature('قُلْ') === '\u064F\u0652', core.vowelSignature('قُلْ'));
 check('wrong vowel differs', core.vowelSignature('قَلْ') !== core.vowelSignature('قُلْ'));
@@ -407,6 +423,35 @@ section('hallucinated endings must not skip ahead');
     check('current word flagged as not heard',
         opsOf(ops, 'miss').map(function (op) { return op.i; }).join(',') === '0', JSON.stringify(opsOf(ops, 'miss')));
     check('hold feedback surfaced', opsOf(ops, 'hold').length === 1, JSON.stringify(ops));
+}
+
+section('ending confusion settles the word with a note (Al-Asr 103:3)');
+{
+    const items = core.buildItems([{ s: 103, a: 3, text: 'وَعَمِلُوا۟ ٱلصَّـٰلِحَـٰتِ وَتَوَاصَوْا۟ بِٱلْحَقِّ' }]);
+    check('the Uthmani word normalizes to الصالحات', items[1].norm === 'الصالحات', items[1].norm);
+    const tracker = core.createTracker(items);
+    tracker.finalize('وعملوا');
+    const ops = tracker.finalize('الصالحين');
+    check('«الصالحين» heard for «الصالحات» still settles the word', tracker.states[1] === 'ok', statesOf(tracker));
+    const notes = opsOf(ops, 'ending');
+    check('with an ending note naming the heard form',
+        notes.length === 1 && notes[0].i === 1 && notes[0].heard === 'الصالحين', JSON.stringify(ops));
+    check('and the recitation continues', tracker.cursor === 2, String(tracker.cursor));
+}
+{
+    const items = core.buildItems([{ s: 103, a: 3, text: 'ٱلصَّـٰلِحَـٰتِ' }]);
+    const tracker = core.createTracker(items);
+    const ops = tracker.finalize('صالحه');
+    check('a lone retry «صالحه» settles too', tracker.states[0] === 'ok', statesOf(tracker) + ' ' + JSON.stringify(ops));
+    check('note names the heard form', opsOf(ops, 'ending')[0] && opsOf(ops, 'ending')[0].heard === 'صالحه',
+        JSON.stringify(ops));
+}
+{
+    const items = core.buildItems([{ s: 103, a: 3, text: 'ٱلصَّـٰلِحَـٰتِ' }]);
+    const tracker = core.createTracker(items);
+    const ops = tracker.finalize('طالحة');
+    check('gibberish «طالحة» never settles', tracker.states[0] === 'pending', statesOf(tracker));
+    check('and raises no ending note', opsOf(ops, 'ending').length === 0, JSON.stringify(ops));
 }
 
 /* -------------------------------------------------------------------------- */

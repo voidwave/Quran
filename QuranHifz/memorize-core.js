@@ -235,6 +235,39 @@
         return prev[b.length];
     }
 
+    /* The endings a recognizer blurs on a good recitation: the rhyming
+     * plural/accusative forms ات/ين/ون, the ta-marbuta ه, and a dropped
+     * definite article. See endingRescue. */
+    const WORD_ENDINGS = ['ات', 'ين', 'ون', 'ه'];
+
+    /**
+     * True when the two words are the same recitable word with a different
+     * ending (or article): «الصالحات»/«الصالحين», «الصالحات»/«صالحه». The
+     * engines smear the END of a word exactly where the mind completes it
+     * from the context — the language model then prefers the more frequent
+     * form. Only the article and one ending may differ, and the stem must
+     * stay intact, so genuinely different words (طالح/صالح) still fail.
+     */
+    function endingRescue(heard, expected) {
+        if (!heard || !expected || heard === expected) {
+            return false;
+        }
+        const bare = function (word) {
+            return word.indexOf('ال') === 0 && word.length > 4 ? word.slice(2) : word;
+        };
+        const stem = function (word) {
+            for (const ending of WORD_ENDINGS) {
+                if (word.endsWith(ending) && word.length - ending.length >= 3) {
+                    return word.slice(0, word.length - ending.length);
+                }
+            }
+            return null;
+        };
+        const heardStem = stem(bare(heard));
+        const expectedStem = stem(bare(expected));
+        return Boolean(heardStem) && Boolean(expectedStem) && heardStem === expectedStem;
+    }
+
     /**
      * Scores how well a heard word matches an expected word, 0..1.
      * 0 means "not the same word". The edit budget grows with word length so
@@ -268,7 +301,13 @@
         const distance = levenshtein(heard, expected);
         const budget = longest <= 2 ? 0 : (longest <= 8 ? 1 : 2);
         if (distance > budget) {
-            return 0;
+            /* The recognizer also smears the END of the word («الصالحات»
+             * heard as «الصالحين» or «صالحه»): when the article and the
+             * ending are all that differ, the word still counts — with a
+             * note (see the 'ending' op) so a wrong ending stays visible
+             * and a correct recitation is never refused for a guessed
+             * ending. */
+            return endingRescue(heard, expected) ? 0.84 : 0;
         }
 
         return 1 - distance / longest;
@@ -825,6 +864,13 @@
                             ops.push({ op: 'weak', i: index });
                         }
                         tracker.stats[strong ? 'strong' : 'weak'] += 1;
+                        // The recognizer blurred the ENDING or the article of
+                        // the word («الصالحين» heard for «الصالحات»): the word
+                        // is settled, with a note to check that ending.
+                        const heardWord = heardWords[pair.h] || '';
+                        if (heardWord !== items[index].norm && endingRescue(heardWord, items[index].norm)) {
+                            ops.push({ op: 'ending', i: index, heard: heardWord });
+                        }
                         // Same word, different vowels — a pronunciation note.
                         if (opts.checkPronunciation !== false && heardSigs
                             && items[index].sig && heardSigs[pair.h]) {
@@ -1093,6 +1139,7 @@
         IGNORE_PHRASES: IGNORE_PHRASES,
         normalizeToken: normalizeToken,
         vowelSignature: vowelSignature,
+        endingRescue: endingRescue,
         splitWords: splitWords,
         tokenize: tokenize,
         flattenTokens: flattenTokens,

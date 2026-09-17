@@ -335,6 +335,19 @@
         span.title = 'راجع النطق — المتوقع: «' + describe(expected) + '»، المسموع: «' + describe(heard) + '»';
     }
 
+    /* The word is right but the recognizer wrote a different ending or left
+       the article out («الصالحين»، «صالحه» for «الصالحات»): the word settles,
+       with the same dotted underline and a tooltip to check the ending. */
+    function markEnding(index, heard) {
+        const span = spans[index];
+        if (!span) {
+            return;
+        }
+        span.classList.add('is-pronounce');
+        span.title = 'راجع نهاية الكلمة — المتوقع: «' + (items[index].norm || items[index].raw)
+            + '»، والمُتعرَّف عليه: «' + (heard || '') + '»';
+    }
+
     /* -----------------------------------------------------------------------
      * Ops from the tracker
      * -------------------------------------------------------------------- */
@@ -370,6 +383,13 @@
                 case 'pronounce':
                     if (settings.strictness !== 'lenient') {
                         markPronunciation(op.i, op.expected, op.heard);
+                    }
+                    break;
+                case 'ending':
+                    /* a right word with a misheard ending («الصالحين» for
+                       «الصالحات»): settle it, but point at the ending */
+                    if (settings.strictness !== 'lenient') {
+                        markEnding(op.i, op.heard);
                     }
                     break;
                 case 'extra':
@@ -894,7 +914,7 @@
             // Say back what was actually heard — the clearest way to explain
             // why nothing matched.
             const tail = words.slice(-6).join(' ');
-            flashStatus('سمعت: «' + tail + '» — لا تُطابق الآيات المحددة');
+            flashStatus('سمعت: «' + tail + '» — لا تُطابق الآيات المحددة؛ أعد من أول الآية أو قل الكلمة مع ما قبلها');
             setHeard(tail);
         } else if (words.length) {
             setHeard(words.slice(-8).join(' '));
