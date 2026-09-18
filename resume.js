@@ -56,7 +56,15 @@
 
     function launch(view) {
         var stored = read();
-        if (!stored) return;
+        if (!stored) {
+            /* first visit (nothing stored): the mushaf is the default view —
+               a bare load of the reader hands over to it; an explicit
+               ?surah= open or a #page anchor is deliberate and stays */
+            if (view === 'index' && !/[?&]surah=/.test(location.search) && !location.hash) {
+                location.replace('index2.html');
+            }
+            return;
+        }
 
         if (view === 'index') {
             /* ?surah= in the address bar is a deliberate open, never redirected. */

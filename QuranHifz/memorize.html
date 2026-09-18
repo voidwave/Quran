@@ -670,6 +670,93 @@
         }
 
         /* ------------------------------------------------------------------
+           Mushaf flow view (Tarteel-like): the passage as one printed page
+        ------------------------------------------------------------------ */
+        .mushaf-flow {
+            font-family: var(--font-quran);
+            font-size: clamp(1.55rem, 1rem + 2.4vw, 2.3rem);
+            line-height: 2.9;
+            color: var(--quran);
+            text-align: center;
+            word-spacing: 0.32em;
+            padding: 4px 2px 28px;
+        }
+
+        .mushaf-flow .mw {
+            padding: 0 1px;
+        }
+
+        /* The verse number in the printed brackets «﴿ ١ ﴾» */
+        .ayah-mark {
+            font-family: var(--font-quran);
+            font-size: 0.78em;
+            color: var(--accent);
+            opacity: 0.9;
+            white-space: nowrap;
+            user-select: none;
+            padding: 0 0.04em;
+        }
+
+        .ayah-mark.is-complete {
+            opacity: 0.5;
+        }
+
+        /* ------------------------------------------------------------------
+           The printed mushaf page (view «مصحف»): page glyph fonts, lines
+           exactly as printed, the print's own verse ornaments
+        ------------------------------------------------------------------ */
+        .mushaf-page {
+            margin: 0 auto;
+            padding: 2px 2px 10px;
+            max-width: 100%;
+        }
+
+        .mushaf-page+.mushaf-page {
+            border-top: 1px solid var(--border);
+            padding-top: 14px;
+        }
+
+        .mushaf-page .line-row {
+            display: flex;
+            flex-wrap: nowrap;
+            justify-content: space-between;
+            font-family: var(--page-font, var(--font-quran));
+            font-size: clamp(1.6rem, 1rem + 2.6vw, 2.5rem);
+            line-height: 1.7;
+            color: var(--quran);
+        }
+
+        /* a line that does not fill the sheet keeps natural spacing, centred
+           (al-Fatiha and the short surahs — like the print) */
+        .mushaf-page .line-row.is-centered {
+            justify-content: center;
+        }
+
+        .mushaf-page .line-row.is-centered>span {
+            margin: 0 0.06em;
+        }
+
+        .mushaf-page .line-row>span {
+            white-space: nowrap;
+        }
+
+        /* the print's verse-number ornament */
+        .mushaf-page .mw-end.is-complete {
+            opacity: 0.5;
+        }
+
+        .mushaf-page .mw,
+        .mushaf-page .mw-end,
+        .mushaf-page .mw-deco {
+            cursor: pointer;
+        }
+
+        .mushaf-page .mw-end,
+        .mushaf-page .mw-deco {
+            cursor: default;
+        }
+
+        /* ------------------------------------------------------------------
            Bottom control bar
         ------------------------------------------------------------------ */
         .mic-bar {
@@ -1158,12 +1245,12 @@
     <header id="button-container" class="appbar">
         <div class="appbar__inner">
             <div class="appbar__tools" id="appbar-tools">
-                <div class="view-switch" role="group" aria-label="التنقل بين القارئ والمصحف والحفظ">
-                    <a class="view-switch__option" id="reader-link" href="../index.html"
-                        title="فتح القارئ: النص العثماني مع التفاسير والترجمات والبحث">القارئ</a>
+                <div class="view-switch" role="group" aria-label="التنقل بين المصحف والتفسير والتسميع">
                     <a class="view-switch__option" id="mushaf-link" href="../index2.html"
                         title="فتح المصحف: الصفحات المطبوعة، كل كلمة فيها رسم متجهي">المصحف</a>
-                    <span class="view-switch__option is-active" aria-current="page">الحفظ</span>
+                    <a class="view-switch__option" id="reader-link" href="../index.html"
+                        title="فتح التفسير: النص العثماني مع التفاسير والترجمات والبحث">تفسير</a>
+                    <span class="view-switch__option is-active" aria-current="page">تسميع</span>
                 </div>
 
                 <button id="theme-toggle" class="btn" type="button" aria-label="Switch to light mode"
@@ -1261,6 +1348,17 @@
 
     <div id="settings-panel" class="settings-panel" hidden aria-label="إعدادات الحفظ">
         <h2 class="settings-panel__title">إعدادات الجلسة</h2>
+
+        <div class="setting">
+            <span class="setting__label">طريقة العرض</span>
+            <select id="view-select" class="select" aria-label="طريقة العرض">
+                <option value="mushaf" selected>مصحف (الافتراضي — صفحة مطبوعة)</option>
+                <option value="list">بطاقات الآيات (العرض السابق)</option>
+            </select>
+            <span class="setting__hint">«مصحف» (الافتراضي): صفحة المصحف بحروف المطبع الأصلية — الأسطر كما في
+                الطبعة، ورقم الآية داخل زخرفته المطبوعة، والكلمات تُكشف أثناء التلاوة. «بطاقات الآيات»: لكل
+                آية بطاقة برأس منفصل.</span>
+        </div>
 
         <div class="setting">
             <span class="setting__label">محرّك التعرّف</span>

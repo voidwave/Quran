@@ -15,7 +15,8 @@
     const SOURCE = '../QuranText/Quran/quran-uthmani.xml';
     const STORAGE_KEY = 'quran-memorize';
     const ARABIC_DIGITS = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-    const MAX_RANGE = 60;          // verses per session
+    const MAX_RANGE = 286;         // verses per session — the longest sura
+    // (al-Baqarah) so a full sura always fits
     const HINT_REVEAL_DELAY_MS = 4500; // legacy constant; reveal is manual only now
     const MODEL_FLAG = 'quran-memorize-model'; // set once the model is cached
     const WORD_AUDIO_BASE = 'https://verses.quran.com/'; // word-by-word recitation
@@ -151,6 +152,9 @@
             /* which phoneme export the checker loads: 'v31-int8' (default)
                or 'v31-fp32' — the Quran-Lab zipformer_p-arabic-v3.1 pair */
             phonemeModel: 'v31-int8',
+            /* 'mushaf' = continuous printed-passage flow (default, Tarteel
+               style); 'list' = the previous per-ayah cards */
+            memorizeView: 'mushaf',
             viewVersion: 2,
             range: null
         };
@@ -180,6 +184,10 @@
                     /* the engine choice is phoneme (default) or int8 only now;
                        a saved v8/v8fp32 (or anything else) becomes phoneme */
                     merged.engine = merged.engine === 'int8' ? 'int8' : 'phoneme';
+                    /* the mushaf flow is the default view now: existing
+                       sessions get it too unless they explicitly pick the
+                       cards view afterwards */
+                    merged.memorizeView = merged.memorizeView === 'list' ? 'list' : 'mushaf';
                     return merged;
                 }
             }
@@ -198,6 +206,7 @@
                     model: settings.model,
                     engine: settings.engine,
                     phonemeModel: settings.phonemeModel === 'v31-fp32' ? 'v31-fp32' : 'v31-int8',
+                    memorizeView: settings.memorizeView === 'list' ? 'list' : 'mushaf',
                     viewVersion: 2
                 },
                 range: currentRange
@@ -318,6 +327,13 @@
                 span.classList.add('is-wait');
                 span.title = 'أعد المحاولة — أو اضغط لإظهار الكلمة';
                 break;
+        }
+
+        /* a print-glyph word keeps its page glyph in every revealed state —
+           swapping in the plain Uthmani text would break the mushaf page
+           (hint states keep the first-letter text; the heard chip stays) */
+        if (span.dataset.g && state !== 'hint' && state !== 'errHint' && !span.firstElementChild) {
+            span.textContent = span.dataset.g;
         }
 
         /* a pronunciation note that waited for the word to become visible */
@@ -1138,7 +1154,8 @@
         if (settings.range && settings.range.surah) {
             return normalizeRange(settings.range);
         }
-        return normalizeRange({ surah: 1, from: 1, to: 7 });
+        /* fresh visit: the whole first sura */
+        return normalizeRange({ surah: 1, from: 1, to: verseCount(1) });
     }
 
     function verseCount(surah) {
@@ -1230,6 +1247,15 @@
             + ' — الكلمات المخفية تُكتشف أثناء تلاوتك';
         main.appendChild(note);
 
+        if (settings.memorizeView === 'mushaf') {
+            buildMushafFlow(main, range);
+            return;
+        }
+        buildListDom(main);
+    }
+
+    /* The per-ayah cards (the previous view): one article per aya. */
+    function buildListDom(main) {
         let article = null;
         let paragraph = null;
         let lastA = -1;
@@ -1269,6 +1295,285 @@
                 paragraph.appendChild(document.createTextNode(' '));
             }
             paragraph.appendChild(span);
+        });
+    }
+
+    /* The continuous Uthmani flow — used as the fallback when the printed
+       page data cannot be loaded. Word states and the tap flow are exactly
+       the same as in the cards view (same spans array and item indices). */
+    function buildUthmaniFlow(main, range) {
+        const flow = document.createElement('div');
+        flow.className = 'mushaf-flow';
+        flow.setAttribute('dir', 'rtl');
+        flow.setAttribute('lang', 'ar');
+        let lastA = -1;
+
+        function addVerseMark(aya) {
+            if (aya < 1) {
+                return;
+            }
+            const mark = document.createElement('span');
+            mark.className = 'ayah-mark';
+            mark.id = 'ayah-' + range.surah + '-' + aya;
+            mark.setAttribute('data-ayah', range.surah + ':' + aya);
+            mark.textContent = '\uFD3F' + toArabicDigits(aya) + '\uFD3E';
+            flow.appendChild(mark);
+            flow.appendChild(document.createTextNode(' '));
+        }
+
+        items.forEach(function (item, index) {
+            if (item.a !== lastA) {
+                if (lastA !== -1) {
+                    addVerseMark(lastA);
+                }
+                lastA = item.a;
+            }
+            const span = document.createElement('span');
+            if (item.meta) {
+                span.className = 'mw-meta';
+                span.textContent = item.raw;
+            } else {
+                span.className = 'mw is-hidden' + (settings.hideMode === 'blur' ? ' is-blur' : '');
+                span.dataset.i = String(index);
+                span.textContent = item.raw;
+                spans[index] = span;
+            }
+            flow.appendChild(span);
+            flow.appendChild(document.createTextNode(' '));
+        });
+        addVerseMark(lastA);
+        main.appendChild(flow);
+    }
+
+    /* -----------------------------------------------------------------------
+     * The printed mushaf page (default view «مصحف»)
+     *
+     * Pages come from QuranText/MushafPages/p*.json: every word is ONE glyph
+     * code point in the page's own font (the Madinah print), the lines are
+     * exactly as printed, and verse numbers are the print's own ornaments.
+     * Word spans keep the same `spans[index]` machinery as the other views;
+     * the glyph rides on `span.dataset.g` so setWordState never swaps it for
+     * the plain Uthmani text. Page data unavailable → the Uthmani flow.
+     * -------------------------------------------------------------------- */
+
+    const MUSH_DIR = '../QuranText/MushafPages/';
+    const mushFonts = {};        // family -> Promise<boolean>
+    const mushPageCache = {};    // page -> Promise<data>
+    let versePagesCache = null;
+    let mushRenderToken = 0;
+
+    function ensureMushFont(family, file) {
+        if (!mushFonts[family]) {
+            mushFonts[family] = (async function () {
+                try {
+                    const url = new URL('../' + file, document.baseURI).href;
+                    const face = new FontFace(family, 'url("' + url + '")');
+                    await face.load();
+                    document.fonts.add(face);
+                    return true;
+                } catch (error) {
+                    return false;
+                }
+            })();
+        }
+        return mushFonts[family];
+    }
+
+    function loadVersePages() {
+        if (!versePagesCache) {
+            versePagesCache = fetch(MUSH_DIR + 'verse-pages.json')
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('HTTP ' + response.status);
+                    }
+                    return response.json();
+                })
+                .then(function (data) { return data.pages; })
+                .catch(function () {
+                    versePagesCache = null;
+                    return null;
+                });
+        }
+        return versePagesCache;
+    }
+
+    function mushPage(page) {
+        if (!mushPageCache[page]) {
+            mushPageCache[page] = fetch(MUSH_DIR + 'p' + page + '.json')
+                .then(function (response) {
+                    if (!response.ok) {
+                        throw new Error('HTTP ' + response.status);
+                    }
+                    return response.json();
+                });
+        }
+        return mushPageCache[page];
+    }
+
+    function mushKeyNumber(key) {
+        const parts = key.split(':');
+        return Number(parts[0]) * 1000 + Number(parts[1]);
+    }
+
+    /* One word element: the page glyph, or the Uthmani text when the page
+       font failed to load (the glyph code points would be blank then). */
+    function setGlyph(span, word, fontOk) {
+        if (fontOk) {
+            span.dataset.g = word.g;
+            span.textContent = word.g;
+        } else {
+            span.textContent = word.x;
+        }
+    }
+
+    /* Short lines keep natural spacing, centred — like the print (al-Fatiha
+       and the short surahs); full lines stretch edge to edge. */
+    function fitCenteredRows(holder) {
+        const width = holder.clientWidth;
+        if (!width || width < 60) {
+            return;   // hidden/zero-width layout cannot be measured
+        }
+        holder.querySelectorAll('.line-row').forEach(function (row) {
+            let total = 0;
+            row.querySelectorAll('span').forEach(function (word) {
+                total += word.offsetWidth;
+            });
+            row.classList.toggle('is-centered', total < width * 0.72);
+        });
+    }
+
+    function buildMushafFlow(main, range) {
+        const token = (mushRenderToken += 1);
+        const holder = document.createElement('div');
+        holder.className = 'mushaf-holder';
+        const loading = document.createElement('p');
+        loading.className = 'range-note';
+        loading.textContent = 'يُحمَّل المصحف…';
+        holder.appendChild(loading);
+        main.appendChild(holder);
+
+        const fromKey = range.surah * 1000 + range.from;
+        const toKey = range.surah * 1000 + range.to;
+        loadVersePages().then(function (pages) {
+            if (!pages) {
+                throw new Error('verse-pages unavailable');
+            }
+            let first = -1;
+            let last = -1;
+            for (let i = 0; i < pages.length; i += 1) {
+                const key = mushKeyNumber(pages[i][1]);
+                if (first < 0 && key >= fromKey) {
+                    first = i;
+                }
+                if (key >= toKey) {
+                    last = i;
+                    break;
+                }
+            }
+            if (first < 0) {
+                first = pages.length - 1;
+            }
+            if (last < 0) {
+                last = pages.length - 1;
+            }
+            const numbers = [];
+            for (let i = first; i <= last; i += 1) {
+                numbers.push(pages[i][0]);
+            }
+            return Promise.all(numbers.map(function (page) {
+                return mushPage(page).then(function (data) {
+                    return ensureMushFont(data.font, data.fontFile).then(function (fontOk) {
+                        return { data: data, fontOk: fontOk };
+                    });
+                });
+            }));
+        }).then(function (pages) {
+            if (!pages || token !== mushRenderToken) {
+                return;
+            }
+            /* map: verse key + printed word number -> item index */
+            const byWord = {};
+            items.forEach(function (item, index) {
+                if (item.meta) {
+                    return;
+                }
+                byWord[item.s + ':' + item.a + ':' + item.wbw] = index;
+            });
+            holder.textContent = '';
+            pages.forEach(function (entry) {
+                const data = entry.data;
+                const card = document.createElement('div');
+                card.className = 'mushaf-page';
+                card.dir = 'rtl';
+                card.lang = 'ar';
+                if (entry.fontOk) {
+                    card.style.setProperty('--page-font', '"' + data.font + '"');
+                } else {
+                    card.style.setProperty('--page-font', 'var(--font-quran)');
+                }
+                data.lines.forEach(function (line) {
+                    const row = document.createElement('div');
+                    row.className = 'line-row';
+                    let used = false;
+                    line.words.forEach(function (word) {
+                        const parts = word.k.split(':');
+                        const s = Number(parts[0]);
+                        const a = Number(parts[1]);
+                        if (s !== range.surah || a < range.from || a > range.to) {
+                            return;
+                        }
+                        used = true;
+                        if (word.t === 'end') {
+                            const mark = document.createElement('span');
+                            mark.className = 'mw-end';
+                            mark.id = 'ayah-' + s + '-' + a;
+                            mark.setAttribute('data-ayah', word.k);
+                            setGlyph(mark, word, entry.fontOk);
+                            row.appendChild(mark);
+                            return;
+                        }
+                        const index = byWord[word.k + ':' + word.p];
+                        const span = document.createElement('span');
+                        if (index === undefined) {
+                            /* no matching recitable item (the four quran.com
+                               merge verses) — drawn, but not tracked */
+                            span.className = 'mw-deco';
+                            setGlyph(span, word, entry.fontOk);
+                        } else {
+                            span.className = 'mw is-hidden' + (settings.hideMode === 'blur' ? ' is-blur' : '');
+                            span.dataset.i = String(index);
+                            setGlyph(span, word, entry.fontOk);
+                            spans[index] = span;
+                        }
+                        row.appendChild(span);
+                    });
+                    if (used) {
+                        card.appendChild(row);
+                    }
+                });
+                if (card.childNodes.length) {
+                    holder.appendChild(card);
+                }
+            });
+            fitCenteredRows(holder);
+            /* words already settled in this session keep their look */
+            for (let i = 0; i < items.length; i += 1) {
+                if (spans[i] && wordState[i] !== 'pending') {
+                    setWordState(i, wordState[i]);
+                }
+            }
+            refreshVerseCompletion();
+            moveCaret(tracker.cursor);
+        }).catch(function () {
+            if (token !== mushRenderToken) {
+                return;
+            }
+            /* the printed pages are unavailable — fall back to the Uthmani
+               flow so the session can still continue */
+            if (holder.parentNode) {
+                holder.parentNode.removeChild(holder);
+            }
+            buildUthmaniFlow(main, range);
         });
     }
 
@@ -1825,10 +2130,10 @@
         els.surahSelect.addEventListener('change', function () {
             const surah = parseInt(toLatinDigits(els.surahSelect.value), 10);
             if (surah >= 1 && surah <= 114) {
+                /* picking a surah defaults to the WHOLE sura (all its ayat),
+                   not a fixed few — the reciter can narrow the range after */
                 const count = verseCount(surah);
-                const from = 1;
-                const to = Math.min(count, 7);
-                const normalized = normalizeRange({ surah: surah, from: from, to: to });
+                const normalized = normalizeRange({ surah: surah, from: 1, to: count });
                 fillInputs(normalized);
                 renderRange(normalized);
             }
@@ -1862,6 +2167,16 @@
             }
             saveState();
         });
+
+        if (els.viewSelect) {
+            els.viewSelect.addEventListener('change', function () {
+                settings.memorizeView = els.viewSelect.value === 'list' ? 'list' : 'mushaf';
+                saveState();
+                if (currentRange) {
+                    renderRange(currentRange);
+                }
+            });
+        }
 
         els.autoscrollCheck.addEventListener('change', function () {
             settings.autoScroll = els.autoscrollCheck.checked;
@@ -1934,6 +2249,9 @@
         updateSegmented();
         els.hideModeSelect.value = settings.hideMode;
         els.autoscrollCheck.checked = Boolean(settings.autoScroll);
+        if (els.viewSelect) {
+            els.viewSelect.value = settings.memorizeView === 'list' ? 'list' : 'mushaf';
+        }
         if (els.phonemeModelSelect) {
             els.phonemeModelSelect.value = settings.phonemeModel === 'v31-fp32' ? 'v31-fp32' : 'v31-int8';
         }
@@ -1966,6 +2284,7 @@
             toolsToggle: document.getElementById('tools-toggle'),
             supportNotice: document.getElementById('mic-support-notice'),
             hideModeSelect: document.getElementById('hide-mode-select'),
+            viewSelect: document.getElementById('view-select'),
             autoscrollCheck: document.getElementById('autoscroll-check'),
             engineSelect: document.getElementById('engine-select'),
             phonemeModelSelect: document.getElementById('phoneme-model-select'),
@@ -2058,6 +2377,9 @@
             }
             if (key === 'phonemeModel') {
                 switchPhonemeModel(value);
+            }
+            if (key === 'memorizeView' && currentRange) {
+                renderRange(currentRange);
             }
             return settings[key];
         },
