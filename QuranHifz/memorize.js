@@ -562,7 +562,7 @@
     /* Aligns one unit sequence with the aya under the caret (plus the next
        one) and applies settlements + notes. Resolves {consumed, settled} —
        how many heard units belong to settled words (the stream trims those). */
-    function analyzeAndApply(units) {
+    function analyzeAndApply(units, margins) {
         if (!tracker || !suras || !window.QuranPhonemeCheck) {
             return Promise.resolve(null);
         }
@@ -613,7 +613,7 @@
                 return null;
             }
             const sequence = QuranPhonemeCheck.buildSequence(entries);
-            const result = QuranPhonemeCheck.analyzeSequence(sequence, units);
+            const result = QuranPhonemeCheck.analyzeSequence(sequence, units, margins);
             if (!result) {
                 return null;
             }
@@ -621,7 +621,7 @@
             if (result.flags.length) {
                 applyPronunciationFlags(result.flags, settled);
             }
-            logPhonemeSession(units, result, settled);
+            logPhonemeSession(units, result, settled, margins);
             return { consumed: consumedUnits(result), settled: settled };
         }).catch(function () { return null; /* المقارنة اختيارية */ });
     }
@@ -660,6 +660,7 @@
 
     let phonStreamStarted = false;
     let phonStreamUnits = [];
+    let phonStreamMargins = [];   // per-unit confidences, parallel to the units
     let phonStreamAligning = false;
 
     /* Every raw mic frame goes straight to the worker; the model decodes it
@@ -679,6 +680,7 @@
         if (!phonStreamStarted) {
             phonStreamStarted = true;
             phonStreamUnits = [];
+            phonStreamMargins = [];
             phonStreamAligning = false;
             setHeard('');
             pronWorker.postMessage({ type: 'stream', action: 'start' });
@@ -689,22 +691,33 @@
 
     function streamUnitsReceived(message) {
         phonStreamUnits = phonStreamUnits.concat(message.units || []);
+        phonStreamMargins = phonStreamMargins.concat(message.margins || []);
+        /* the worker's open CTC run carries no margin until it closes — pad
+           so both arrays stay index-aligned */
+        while (phonStreamMargins.length < phonStreamUnits.length) {
+            phonStreamMargins.push(null);
+        }
+        while (phonStreamMargins.length > phonStreamUnits.length) {
+            phonStreamMargins.pop();
+        }
         setHeard(phonStreamUnits.slice(-12).join(' '));
         if (phonStreamAligning) {
             return;
         }
         phonStreamAligning = true;
-        analyzeAndApply(phonStreamUnits).then(function (outcome) {
+        analyzeAndApply(phonStreamUnits, phonStreamMargins).then(function (outcome) {
             phonStreamAligning = false;
             if (!outcome) {
                 return;
             }
             if (outcome.consumed > 0) {
                 phonStreamUnits.splice(0, outcome.consumed);
+                phonStreamMargins.splice(0, outcome.consumed);
             }
             if (phonStreamUnits.length > 80) {
                 /* safety cap — junk that never aligns must not grow forever */
                 phonStreamUnits.splice(0, phonStreamUnits.length - 80);
+                phonStreamMargins.splice(0, phonStreamMargins.length - 80);
             }
         }).catch(function () {
             phonStreamAligning = false;
@@ -717,6 +730,7 @@
         }
         phonStreamStarted = false;
         phonStreamUnits = [];
+        phonStreamMargins = [];
         phonStreamAligning = false;
     }
 
@@ -733,7 +747,7 @@
     /* Session trail for the phoneme engine (dev): the last 60 utterances —
        what it heard, which words settled, and where the cursor is. Inspect
        with JSON.parse(localStorage.getItem('quran-phoneme-log')). */
-    function logPhonemeSession(units, result, settled) {
+    function logPhonemeSession(units, result, settled, margins) {
         try {
             const trail = JSON.parse(localStorage.getItem('quran-phoneme-log') || '[]');
             trail.push({
@@ -745,6 +759,11 @@
                     const errors = word.bad + word.miss;
                     return key + (settled[key] ? (errors ? '=ok(' + errors + ')' : '=ok') : '!' + errors);
                 }) : null,
+                /* per-unit confidences (rounded, -1 = open run / unknown):
+                   the calibration source for note filtering thresholds */
+                mg: (margins || []).map(function (m) {
+                    return m === undefined || m === null ? -1 : Math.round(m * 10) / 10;
+                }),
                 cursor: tracker ? tracker.cursor : null
             });
             while (trail.length > 60) {
@@ -756,6 +775,7 @@
 
     const PRON_LABELS = {
         letter: 'حرف مخالف',
+        letterNear: 'حرف متقارب (صوت قريب)',
         vowel: 'حركة مخالفة',
         shadda: 'شدة ناقصة',
         missing: 'حرف لم يُسمع',
@@ -764,6 +784,10 @@
         qlqla: 'قلقلة',
         confidence: 'نطق غير واضح (ثقة منخفضة)'
     };
+
+    /* focused retry feedback state: the cursor word + how many consecutive
+       analyses it has carried notes without settling */
+    let stuckTrack = { index: -1, count: 0 };
 
     function describePronNote(note) {
         const label = PRON_LABELS[note.kind] || note.kind;
@@ -786,13 +810,14 @@
     /* Phoneme-only mode: a word every unit of which was heard — cleanly or
        with minor notes — settles the tracker (the chain rule lives in
        core.settleWords). Guards: at least HALF the word's units must count
-       as evidence — an exact match, or (lenNear) a pair differing only in
-       a madd/ghunna hold length, which the model cannot grade; wrong-vowel
-       and wrong-letter sound-alikes never count (they must not carry the
-       recitation forward). Small deviations settle WITH a note only when
-       they add up; a single blurred unit settles quietly. Returns the set
-       of words the TRACKER actually settled (chain-limited!) — the stream
-       trims only those units. */
+       as evidence — an exact match, a madd/ghunna hold-length difference
+       (lenNear), or a same-family letter near (famNear) — the model cannot
+       grade holds, and family confusions (ض↔ظ…) are its most common blur;
+       wrong-vowel and far-letter sound-alikes never count (they must not
+       carry the recitation forward). Small deviations settle WITH a note
+       only when they add up; a single blurred unit settles quietly.
+       Returns the set of words the TRACKER actually settled
+       (chain-limited!) — the stream trims only those units. */
     function settlePhonemeWords(result) {
         if (settings.engine !== 'phoneme' || !tracker || !result || !result.words) {
             return {};
@@ -801,7 +826,7 @@
         const evals = [];
         result.words.forEach(function (word) {
             const accounted = word.seen + (word.lead || 0) >= word.total;
-            const evidence = word.exact + (word.lenNear || 0);
+            const evidence = word.exact + (word.lenNear || 0) + (word.famNear || 0);
             const halfExact = evidence * 2 >= word.total;
             const errors = word.bad + word.miss;
             const allowed = word.total <= 2 ? 0 : (word.total <= 4 ? 1 : 2);
@@ -864,6 +889,7 @@
 
     function applyPronunciationFlags(flags, settled) {
         const marked = [];
+        let cursorNotes = null;
         flags.forEach(function (flag) {
             const notes = flag.notes.filter(function (note) {
                 return QuranPhonemeCheck.MARK_KINDS[note.kind];
@@ -889,6 +915,9 @@
                    repeats endings like «عَلَيْهِمْ» or «ٱلَّذِينَ»), and
                    annotating them points at a verse not reached yet */
                 return;
+            }
+            if (index === tracker.cursor && !cursorNotes) {
+                cursorNotes = notes;
             }
             const key = flag.ref.s + ':' + flag.ref.a + ':' + flag.ref.wi;
             const blocking = settings.engine === 'phoneme'
@@ -918,6 +947,25 @@
                 return '«' + word + '»';
             }).join(' و');
             flashStatus('مدقّق النطق: راجع ' + head + (marked.length > 2 ? ' وغيرها' : ''));
+        }
+        /* focused retry feedback: when the SAME word still carries notes on a
+           second consecutive attempt, show the exact unit diff (expected vs
+           heard) in the status line instead of the generic review message */
+        if (cursorNotes) {
+            let stuckIndex = tracker.cursor;
+            while (stuckIndex < items.length && items[stuckIndex].meta) {
+                stuckIndex += 1;
+            }
+            if (stuckTrack.index === stuckIndex) {
+                stuckTrack.count += 1;
+            } else {
+                stuckTrack = { index: stuckIndex, count: 1 };
+            }
+            if (stuckTrack.count >= 2 && stuckIndex < items.length) {
+                flashStatus('مدقّق النطق — «' + items[stuckIndex].raw + '»: ' + describePronNote(cursorNotes[0]));
+            }
+        } else {
+            stuckTrack = { index: -1, count: 0 };
         }
     }
 

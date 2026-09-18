@@ -34,7 +34,11 @@
     const WORKER_URL = new URL('memorize-asr-worker.js', SCRIPT_SRC).href;
     const INT8_WORKER_URL = new URL('ort-nemo-asr-worker.js', SCRIPT_SRC).href;
     const SAMPLE_RATE = 16000;
-    const FRAME_SAMPLES = 4096;        // ~256 ms per AudioContext callback
+    const FRAME_SAMPLES = 1024;        // ~64 ms per AudioContext callback:
+                                       // the worker can decode a 48-frame
+                                       // step as soon as it accrues instead
+                                       // of waiting for the next 256 ms
+                                       // batch (saves ~150–300 ms of lag)
     const VAD_RMS = 0.018;             // speech threshold (RMS)
     /* Whisper-quality notes: clipped one-or-two-word fragments are where the
        recognizer invents endings (a measured example: a 2.2 s cut of "قل هو
@@ -588,15 +592,39 @@
         }
 
         function resampleTo16k(input, fromRate) {
+            if (fromRate === SAMPLE_RATE) {
+                return input;
+            }
+            /* Windowed-sinc (Hamming, 32 taps). The old linear interpolation
+               aliased the 6.4–8 kHz band back into speech — mobile devices
+               usually refuse a 16 kHz AudioContext (iOS gives 44.1/48 kHz),
+               so this path is the mobile-quality path and must not smear the
+               sibilants the phoneme model listens for. ~32 mults per output
+               sample ≈ 0.5 ms per 0.25 s frame — negligible. */
             const ratio = SAMPLE_RATE / fromRate;
-            const length = Math.round(input.length * ratio);
+            const length = Math.max(1, Math.round(input.length * ratio));
             const out = new Float32Array(length);
+            const half = 16;
+            const fc = Math.min(0.5, ratio * 0.5);   // output Nyquist, cycles per input sample
             for (let i = 0; i < length; i += 1) {
-                const position = i / ratio;
-                const left = Math.floor(position);
-                const right = Math.min(left + 1, input.length - 1);
-                const frac = position - left;
-                out[i] = input[left] * (1 - frac) + input[right] * frac;
+                const center = (i + 0.5) / ratio - 0.5;
+                let acc = 0;
+                let norm = 0;
+                const from = Math.ceil(center - half);
+                const to = Math.floor(center + half);
+                for (let j = from; j <= to; j += 1) {
+                    if (j < 0 || j >= input.length) {
+                        continue;
+                    }
+                    const t = j - center;
+                    const x = 2 * fc * t;
+                    const sinc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+                    const win = 0.54 + 0.46 * Math.cos((Math.PI * t) / half);
+                    const k = sinc * win;
+                    acc += input[j] * k;
+                    norm += k;
+                }
+                out[i] = norm > 1e-6 ? acc / norm : 0;
             }
             return out;
         }

@@ -8,10 +8,12 @@
  *   unitInfo(piece), alignUnits(clusters, heard), MARK_KINDS
  * }
  *
- * A flag is {ref:{s,a,wi}, notes:[{kind, expected, heard}]} where kind is one
- * of letter | vowel | shadda | maddShort | maddLong | qlqla | missing.
- * MARK_KINDS lists the kinds worth showing as a word note (madd lengths are
- * reciter-dependent and stay informatory).
+ * A flag is {ref:{s,a,wi}, notes:[{kind, expected, heard, margin?}]} where
+ * kind is one of letter | letterNear | vowel | shadda | maddShort | maddLong |
+ * qlqla | confidence | missing. Only letter/missing block; letterNear (a
+ * same-family letter confusion) and confidence (a low-margin blur) settle
+ * with a visible note. MARK_KINDS lists the kinds worth showing as a word
+ * note (madd lengths are reciter-dependent and stay informatory).
  *
  * Per-word stats (analyzeSequence) carry lenNear: near-pairs that differ ONLY
  * in a repeated-letter run length (a madd/ghunna hold — the model's one
@@ -29,8 +31,28 @@
     var MADD_LETTERS = { 'ا': true, 'و': true, 'ي': true };
     var GAP = 4;
     var MIN_ALIGNED = 3;
+    /* The model's known letter confusions live inside phonetic families
+       (ض↔ظ، ص↔س، ذ↔ز، ط↔ت، ك↔ق، ح↔ه/خ/غ، ع↔ء). A same-family substitution
+       becomes a NON-blocking «حرف متقارب» note that still settles the word —
+       mis-hearing within a family is the single most common false block.
+       A different letter outside its family stays a blocking mistake. */
+    var LETTER_FAMILIES = [['ص', 'س', 'ث'], ['ض', 'ظ'], ['ذ', 'ز'], ['ط', 'ت'], ['ك', 'ق'], ['ح', 'ه', 'خ', 'غ'], ['ع', 'ء']];
+    var FAMILY_OF = {};
+    LETTER_FAMILIES.forEach(function (fam) {
+        fam.forEach(function (letter) {
+            FAMILY_OF[letter] = fam;
+        });
+    });
+    function sameFamily(a, b) {
+        var fam = FAMILY_OF[a];
+        return Boolean(fam) && fam.indexOf(b) >= 0;
+    }
+    /* Below this peak-margin the model was not sure what it heard: a letter
+       difference is a blur (confidence note), not a mistake. Calibrated
+       against real recitations (see the phoneme trail's margin stats). */
+    var LETTER_MARGIN_MIN = 2.0;
 
-    var MARK_KINDS = { letter: true, vowel: true, shadda: true, missing: true };
+    var MARK_KINDS = { letter: true, letterNear: true, vowel: true, shadda: true, missing: true, confidence: true };
 
     var canonCache = {};
 
@@ -263,8 +285,11 @@
         return { clusters: clusters, refs: ok ? refs : null };
     }
 
-    /** Note for one aligned pair (or null when acceptable). */
-    function classifyPair(expected, heard) {
+    /** Note for one aligned pair (or null when acceptable).
+     *  margin (optional) = the model's peak-minus-runner-up confidence for
+     *  the heard unit: a low-confidence letter difference is a blur, not a
+     *  mistake; a same-family difference is a non-blocking near note. */
+    function classifyPair(expected, heard, margin) {
         if (expected === heard) {
             return null;
         }
@@ -277,22 +302,30 @@
             return null;
         }
         if (!a.letter || !a.uniform || !b.uniform || a.letter !== b.letter) {
-            return { kind: 'letter', expected: expected, heard: heard };
+            if (margin !== undefined && margin !== null && margin < LETTER_MARGIN_MIN) {
+                return { kind: 'confidence', expected: expected, heard: heard, margin: margin };
+            }
+            return {
+                kind: sameFamily(a.letter, b.letter) ? 'letterNear' : 'letter',
+                expected: expected,
+                heard: heard,
+                margin: margin
+            };
         }
         if (a.vowel !== b.vowel) {
-            return { kind: 'vowel', expected: expected, heard: heard };
+            return { kind: 'vowel', expected: expected, heard: heard, margin: margin };
         }
         if (a.count !== b.count) {
             if (a.count > b.count && !a.vowel && MADD_LETTERS[a.letter]) {
-                return { kind: 'maddShort', expected: expected, heard: heard };
+                return { kind: 'maddShort', expected: expected, heard: heard, margin: margin };
             }
             if (a.count > b.count) {
-                return { kind: 'shadda', expected: expected, heard: heard };
+                return { kind: 'shadda', expected: expected, heard: heard, margin: margin };
             }
-            return { kind: 'maddLong', expected: expected, heard: heard };
+            return { kind: 'maddLong', expected: expected, heard: heard, margin: margin };
         }
         if (a.qlqla !== b.qlqla) {
-            return { kind: 'qlqla', expected: expected, heard: heard };
+            return { kind: 'qlqla', expected: expected, heard: heard, margin: margin };
         }
         return null;
     }
@@ -300,14 +333,22 @@
     /**
      * Aligns heard units with the canonical sequence and groups deviations
      * per word. Leading/trailing regions the utterance did not cover are
-     * trimmed; returns null when too little aligned.
+     * trimmed; returns null when too little aligned. margins (optional) are
+     * the per-unit confidences aligned with heardUnits (they travel with
+     * the stream); the '#'-prefixed placeholder units are dropped together
+     * with their margins so the indices stay aligned.
      */
-    function analyzeSequence(sequence, heardUnits) {
+    function analyzeSequence(sequence, heardUnits, margins) {
         if (!sequence || !sequence.clusters || !sequence.refs || !sequence.clusters.length) {
             return null;
         }
-        var heard = (heardUnits || []).filter(function (unit) {
-            return unit && unit.charAt(0) !== '#';
+        var heard = [];
+        var hMargins = [];
+        (heardUnits || []).forEach(function (unit, unitIndex) {
+            if (unit && unit.charAt(0) !== '#') {
+                heard.push(unit);
+                hMargins.push(margins ? margins[unitIndex] : undefined);
+            }
         });
         if (!heard.length) {
             return null;
@@ -400,7 +441,7 @@
                 continue;
             }
             var key = ref.s + ':' + ref.a + ':' + ref.wi;
-            var stat = words[key] || (words[key] = { ref: ref, seen: 0, total: 0, clean: true, exact: 0, bad: 0, miss: 0, lead: 0, lenNear: 0 });
+            var stat = words[key] || (words[key] = { ref: ref, seen: 0, total: 0, clean: true, exact: 0, bad: 0, miss: 0, lead: 0, lenNear: 0, famNear: 0 });
             stat.seen += 1;
             stat.firstC = stat.firstC === undefined ? op.c : Math.min(stat.firstC, op.c);
             if (op.type === 'match') {
@@ -414,7 +455,7 @@
             if (op.type === 'miss') {
                 note = { kind: 'missing', expected: sequence.clusters[op.c], heard: null };
             } else if (op.h !== undefined) {
-                note = classifyPair(sequence.clusters[op.c], heard[op.h]);
+                note = classifyPair(sequence.clusters[op.c], heard[op.h], hMargins[op.h]);
             }
             if (!note) {
                 continue;
@@ -424,6 +465,12 @@
                evidence the letter was said — graded lengths are not reliable */
             if (op.type === 'near' && (note.kind === 'shadda' || note.kind === 'maddShort' || note.kind === 'maddLong')) {
                 stat.lenNear += 1;
+            }
+            /* a same-family letter near-miss is HALF evidence the letter was
+               said: single-cluster words like «ضَ» heard «ظَ» settle with a
+               «حرف متقارب» note instead of freezing the cursor */
+            if (note.kind === 'letterNear') {
+                stat.famNear += 1;
             }
             if (note.kind === 'letter' || note.kind === 'missing') {
                 stat.clean = false;
@@ -474,6 +521,7 @@
                 miss: stat.miss,
                 lead: stat.lead,
                 lenNear: stat.lenNear,
+                famNear: stat.famNear,
                 hFrom: stat.hFrom,
                 hTo: stat.hTo
             };

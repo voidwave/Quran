@@ -77,3 +77,25 @@ for (const [name, u] of Object.entries(probes5)) {
     const notes = r ? r.flags.filter((f) => f.ref.wi === 14).flatMap((f) => f.notes.map((n) => n.kind)) : null;
     console.log('ila ' + name.padEnd(10), JSON.stringify({ stats, gateNew, notes }));
 }
+
+/* families + margins (optimization batch) */
+const fam = C.analyzeSequence(mk(['لْ', 'ضَ', 'نْ', 'ضَ', 'لْ']), ['لْ', 'ظَ', 'نْ', 'ضَ', 'لْ']).words[0];
+const nonFam = C.analyzeSequence(mk(['لْ', 'قَ', 'نْ', 'قَ', 'لْ']), ['لْ', 'وَ', 'نْ', 'قَ', 'لْ']);
+const nonFamWord = nonFam.words[0];
+console.log('family near   ', JSON.stringify({
+    exact: fam.exact, famNear: fam.famNear, bad: fam.bad,
+    gate: (fam.exact + (fam.lenNear || 0) + (fam.famNear || 0)) * 2 >= fam.total
+}));
+console.log('non-family    ', JSON.stringify({
+    exact: nonFamWord.exact, famNear: nonFamWord.famNear, bad: nonFamWord.bad, clean: nonFamWord.clean,
+    notes: nonFam.flags[0] && nonFam.flags[0].notes.map((n) => n.kind)
+}));
+console.log('classifyPair  ', JSON.stringify({
+    famConf: C.classifyPair('ضَ', 'ظَ', 5).kind,
+    lowMargin: C.classifyPair('قَ', 'وَ', 1.0).kind,
+    highMargin: C.classifyPair('قَ', 'وَ', 5).kind,
+    noMargin: C.classifyPair('قَ', 'وَ').kind
+}));
+/* margins travel with the heard units: index alignment through '#' filter */
+const withHash = C.analyzeSequence(mk(['قُ', 'قُ', 'قُ']), ['#x', 'قُ', 'قُ', 'قُ'], [9, 9, 9, 9]).words[0];
+console.log('hash filter   ', JSON.stringify({ exact: withHash.exact }));
