@@ -27,6 +27,35 @@
     let els = {};
     let suras = null;              // <sura> nodes from quran-uthmani.xml
     let items = [];                // core items for the current range
+    let canonWiMap = [];           // canonical (non-meta) word index per item
+
+    /* The canonical phoneme tables number RECITABLE words only, while render
+       items also carry standalone waqf marks («ۚ»…) as meta entries. Item
+       .wi therefore counts those marks too: using it as a canon index made
+       the caret-slice skip a word too many after every mark and the
+       settle/flag lookups fail outright — words like «كَبُرَتْ» and «إِلَّا»
+       computed zero errors yet could never settle (user: «its still stuck on
+       إلا»). Derive the canon index for each item instead. */
+    function canonIndexOf(index) {
+        if (canonWiMap.length !== items.length) {
+            canonWiMap = new Array(items.length);
+            let verseKey = null;
+            let count = 0;
+            for (let i = 0; i < items.length; i += 1) {
+                const it = items[i];
+                const key = it.s + ':' + it.a;
+                if (key !== verseKey) {
+                    verseKey = key;
+                    count = 0;
+                }
+                canonWiMap[i] = count;
+                if (!it.meta) {
+                    count += 1;
+                }
+            }
+        }
+        return canonWiMap[index];
+    }
     let spans = [];                // item index -> span element (null for meta)
     let wordState = [];            // UI state per item
     let tracker = null;
@@ -545,6 +574,7 @@
         if (!item) {
             return Promise.resolve(null);
         }
+        const caretWi = canonIndexOf(index);
         const sura = item.s;
         const wanted = [item.a];
         if (item.a + 1 <= verseCount(sura)) {
@@ -558,22 +588,22 @@
                 if (!canon) {
                     return;
                 }
-                if (i === 0 && item.wi > 0 && canon.lens && canon.lens[item.wi] !== undefined) {
+                if (i === 0 && caretWi > 0 && canon.lens && canon.lens[caretWi] !== undefined) {
                     /* start the alignment at the word under the caret: keeping
                        the earlier words let a repeated word (e.g. the second
                        «عَلَيْهِمْ» of 1:7) tie with its EARLIER occurrence,
                        and the earliest-position preference then stole its
                        units — the frontier word never saw them */
-                    const skip = canon.lens.slice(0, item.wi).reduce(function (a, b) { return a + b; }, 0);
+                    const skip = canon.lens.slice(0, caretWi).reduce(function (a, b) { return a + b; }, 0);
                     entries.push({
                         s: sura,
                         a: wanted[i],
                         canon: {
                             clusters: canon.clusters.slice(skip),
-                            lens: canon.lens.slice(item.wi),
+                            lens: canon.lens.slice(caretWi),
                             bismillah: canon.bismillah
                         },
-                        wiOffset: item.wi
+                        wiOffset: caretWi
                     });
                     return;
                 }
@@ -614,7 +644,7 @@
             for (let i = 0; i < items.length; i += 1) {
                 const candidate = items[i];
                 if (!candidate.meta && candidate.s === word.ref.s &&
-                    candidate.a === word.ref.a && candidate.wi === word.ref.wi) {
+                    candidate.a === word.ref.a && canonIndexOf(i) === word.ref.wi) {
                     index = i;
                     break;
                 }
@@ -729,6 +759,9 @@
         vowel: 'حركة مخالفة',
         shadda: 'شدة ناقصة',
         missing: 'حرف لم يُسمع',
+        maddShort: 'مدّ ناقص',
+        maddLong: 'مدّ زائد',
+        qlqla: 'قلقلة',
         confidence: 'نطق غير واضح (ثقة منخفضة)'
     };
 
@@ -752,12 +785,14 @@
 
     /* Phoneme-only mode: a word every unit of which was heard — cleanly or
        with minor notes — settles the tracker (the chain rule lives in
-       core.settleWords). Guards: at least HALF the word's units must have
-       matched exactly (weak sound-alikes must not carry the recitation
-       forward), and small deviations settle WITH a note only when they add
-       up; a single blurred unit settles quietly. Returns the set of words
-       the TRACKER actually settled (chain-limited!) — the stream trims
-       only those units. */
+       core.settleWords). Guards: at least HALF the word's units must count
+       as evidence — an exact match, or (lenNear) a pair differing only in
+       a madd/ghunna hold length, which the model cannot grade; wrong-vowel
+       and wrong-letter sound-alikes never count (they must not carry the
+       recitation forward). Small deviations settle WITH a note only when
+       they add up; a single blurred unit settles quietly. Returns the set
+       of words the TRACKER actually settled (chain-limited!) — the stream
+       trims only those units. */
     function settlePhonemeWords(result) {
         if (settings.engine !== 'phoneme' || !tracker || !result || !result.words) {
             return {};
@@ -766,7 +801,8 @@
         const evals = [];
         result.words.forEach(function (word) {
             const accounted = word.seen + (word.lead || 0) >= word.total;
-            const halfExact = word.exact * 2 >= word.total;
+            const evidence = word.exact + (word.lenNear || 0);
+            const halfExact = evidence * 2 >= word.total;
             const errors = word.bad + word.miss;
             const allowed = word.total <= 2 ? 0 : (word.total <= 4 ? 1 : 2);
             let state = 'fail';
@@ -779,7 +815,7 @@
             for (let i = 0; i < items.length; i += 1) {
                 const candidate = items[i];
                 if (!candidate.meta && candidate.s === word.ref.s &&
-                    candidate.a === word.ref.a && candidate.wi === word.ref.wi) {
+                    candidate.a === word.ref.a && canonIndexOf(i) === word.ref.wi) {
                     evals.push({ index: i, state: state });
                     break;
                 }
@@ -821,7 +857,7 @@
         const settled = {};
         outcome.settled.forEach(function (index) {
             const item = items[index];
-            settled[item.s + ':' + item.a + ':' + item.wi] = true;
+            settled[item.s + ':' + item.a + ':' + canonIndexOf(index)] = true;
         });
         return settled;
     }
@@ -839,7 +875,7 @@
             for (let i = 0; i < items.length; i += 1) {
                 const candidate = items[i];
                 if (!candidate.meta && candidate.s === flag.ref.s &&
-                    candidate.a === flag.ref.a && candidate.wi === flag.ref.wi) {
+                    candidate.a === flag.ref.a && canonIndexOf(i) === flag.ref.wi) {
                     index = i;
                     break;
                 }

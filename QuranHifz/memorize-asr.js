@@ -45,6 +45,13 @@
     const SILENCE_FLUSH_MS = 1200;     // pause that closes an utterance
     const SHORT_SPEECH_MS = 700;       // below this a gap must be longer
     const LONG_FLUSH_SILENCE_MS = 2000; // pause before flushing a short one
+    const CAPTURE_FLUSH_MS = 550;      // phoneme stream: flush the tail at the
+    // first natural pause (verse-end pauses
+    // are ~0.5 s; the 1.2/2 s whisper limits
+    // made the last word of a verse wait for
+    // the NEXT verse's audio to fill a
+    // decode window). Repeated flushes are
+    // no-ops when nothing is pending.
     const MIN_SPEECH_MS = 350;         // ignore clicks, coughs and lip noise
     const MAX_UTTERANCE_MS = 14000;    // hard cut for a very long phrase
     const TRANSCRIBE_TIMEOUT_MS = 60000; // restart the worker if generation wedges
@@ -523,7 +530,13 @@
             }
 
             if (collecting) {
-                const silenceLimit = speechMs >= SHORT_SPEECH_MS ? SILENCE_FLUSH_MS : LONG_FLUSH_SILENCE_MS;
+                /* captureOnly (phoneme stream) mode only needs the tail
+                   DECODED at a pause — short-context streaming is safe
+                   there, so use the short limit; the whisper limits stay
+                   for the text engines (tiny fragments invent endings) */
+                const silenceLimit = captureOnly
+                    ? CAPTURE_FLUSH_MS
+                    : (speechMs >= SHORT_SPEECH_MS ? SILENCE_FLUSH_MS : LONG_FLUSH_SILENCE_MS);
                 if (silenceMs >= silenceLimit || bufferedMs >= MAX_UTTERANCE_MS) {
                     finishCollect();
                 }

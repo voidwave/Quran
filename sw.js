@@ -29,7 +29,7 @@
  * is deleted on activate. The data/audio caches survive version bumps.
  */
 
-const VERSION = 'v18';
+const VERSION = 'v21';
 
 const SHELL_CACHE = 'quran-shell-' + VERSION;
 const DATA_CACHE = 'quran-data';

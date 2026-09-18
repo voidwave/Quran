@@ -12,6 +12,11 @@
  * of letter | vowel | shadda | maddShort | maddLong | qlqla | missing.
  * MARK_KINDS lists the kinds worth showing as a word note (madd lengths are
  * reciter-dependent and stay informatory).
+ *
+ * Per-word stats (analyzeSequence) carry lenNear: near-pairs that differ ONLY
+ * in a repeated-letter run length (a madd/ghunna hold — the model's one
+ * unreliable dimension). Callers may credit them as half-evidence when
+ * deciding whether the word's letters were truly said.
  */
 (function () {
     'use strict';
@@ -134,6 +139,27 @@
         return 6;
     }
 
+    /** Alignment cost used by the DP. A pair differing ONLY in a run length
+     * (same letter, vowel and qlqla — a madd/ghunna hold the model cannot
+     * grade) costs 0 here so the aligner keeps the LOCAL pairing: with the
+     * raw unitCost (2) the DP abandoned «للَ»↔«لَ» and stole an exact «لَ»
+     * much later, leaving the word's own clusters as phantom «missing»
+     * notes («إِلَّا» heard as «ءِ لَ اا» split into 2 fake misses). The
+     * untranscripted cost is still used for classification, so the pair
+     * yields a length note — never a blocking miss. */
+    function alignCost(can, heard) {
+        var cost = unitCost(can, heard);
+        if (cost === 2) {
+            var a = unitInfo(can), b = unitInfo(heard);
+            if (a.letter === b.letter && a.uniform && b.uniform &&
+                a.vowel === b.vowel && a.qlqla === b.qlqla &&
+                a.count !== b.count && a.count > 0 && b.count > 0) {
+                return 0;
+            }
+        }
+        return cost;
+    }
+
     /** Needleman-Wunsch alignment; returns ops {type, c?, h?}.
      * Semi-global: leading and trailing HEARD units are free — the buffer
      * may open with stale fragments of earlier attempts and end with the
@@ -157,7 +183,7 @@
         for (i = 1; i <= n; i += 1) {
             rows[i][0] = rows[i - 1][0] + GAP * W;
             for (j = 1; j <= m; j += 1) {
-                var sub = rows[i - 1][j - 1] + unitCost(clusters[i - 1], heard[j - 1]) * W + i;
+                var sub = rows[i - 1][j - 1] + alignCost(clusters[i - 1], heard[j - 1]) * W + i;
                 var del = rows[i - 1][j] + GAP * W;
                 var ins = rows[i][j - 1] + GAP * W;
                 rows[i][j] = Math.min(sub, del, ins);
@@ -175,10 +201,11 @@
         i = n; j = endJ;
         while (i > 0 || j > 0) {
             if (i > 0 && j > 0) {
-                var cost = unitCost(clusters[i - 1], heard[j - 1]);
+                var cost = alignCost(clusters[i - 1], heard[j - 1]);
                 if (rows[i][j] === rows[i - 1][j - 1] + cost * W + i) {
+                    var real = unitCost(clusters[i - 1], heard[j - 1]);
                     ops.push({
-                        type: cost === 0 ? 'match' : (cost <= 3 ? 'near' : 'bad'),
+                        type: real === 0 ? 'match' : (real <= 3 ? 'near' : 'bad'),
                         c: i - 1,
                         h: j - 1
                     });
@@ -373,7 +400,7 @@
                 continue;
             }
             var key = ref.s + ':' + ref.a + ':' + ref.wi;
-            var stat = words[key] || (words[key] = { ref: ref, seen: 0, total: 0, clean: true, exact: 0, bad: 0, miss: 0, lead: 0 });
+            var stat = words[key] || (words[key] = { ref: ref, seen: 0, total: 0, clean: true, exact: 0, bad: 0, miss: 0, lead: 0, lenNear: 0 });
             stat.seen += 1;
             stat.firstC = stat.firstC === undefined ? op.c : Math.min(stat.firstC, op.c);
             if (op.type === 'match') {
@@ -391,6 +418,12 @@
             }
             if (!note) {
                 continue;
+            }
+            /* a pair that differs only in a run length (same letter, vowel and
+               qlqla; only the repeat count of a madd/ghunna hold differs) is
+               evidence the letter was said — graded lengths are not reliable */
+            if (op.type === 'near' && (note.kind === 'shadda' || note.kind === 'maddShort' || note.kind === 'maddLong')) {
+                stat.lenNear += 1;
             }
             if (note.kind === 'letter' || note.kind === 'missing') {
                 stat.clean = false;
@@ -440,6 +473,7 @@
                 bad: stat.bad,
                 miss: stat.miss,
                 lead: stat.lead,
+                lenNear: stat.lenNear,
                 hFrom: stat.hFrom,
                 hTo: stat.hTo
             };
@@ -473,6 +507,7 @@
         unitInfo: unitInfo,
         unitCost: unitCost,
         alignUnits: alignUnits,
+        alignCost: alignCost,
         clearCache: clearCache,
         MARK_KINDS: MARK_KINDS,
         CANON_BASE: CANON_BASE
