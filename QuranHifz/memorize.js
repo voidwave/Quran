@@ -1361,6 +1361,8 @@
     const mushPageCache = {};    // page -> Promise<data>
     let versePagesCache = null;
     let mushRenderToken = 0;
+    let mushFlowHolder = null;   // the printed-page holder on screen
+    let mushFitQueued = false;
 
     function ensureMushFont(family, file) {
         if (!mushFonts[family]) {
@@ -1442,10 +1444,115 @@
         });
     }
 
+    /* The printed lines never wrap, so their glyph size has to be measured:
+       the biggest size at which the longest line still fits the page width —
+       the same rule the mushaf view uses. Without it a phone cannot show a
+       page: the too-wide rows grow the document past the screen, and mobile
+       browsers then shrink the whole page to fit. */
+    const MUSHAF_REF_SIZE = 100;     // measuring size: widths scale with it
+    const MUSHAF_MAX_SIZE = 40;      // like the old 2.5rem cap
+    const MUSHAF_FIT_SLACK = 0.997;  // glyph advances are rounded per size
+
+    /* The row's natural width. It never wraps, so without max-content the
+       flex line is clamped to the card and always reads as if it fits. */
+    function measureRowWidth(row) {
+        row.style.width = 'max-content';
+        const width = row.getBoundingClientRect().width;
+        row.style.width = '';
+        return width;
+    }
+
+    function fitMushafRows(holder) {
+        const cards = [].slice.call(holder.querySelectorAll('.mushaf-page'));
+        if (!cards.length) {
+            return;
+        }
+        /* The cards share the content width; the narrowest one rules. */
+        let inner = Infinity;
+        cards.forEach(function (card) {
+            const styles = getComputedStyle(card);
+            const padding = parseFloat(styles.paddingInlineStart)
+                + parseFloat(styles.paddingInlineEnd);
+            inner = Math.min(inner, card.clientWidth - padding);
+        });
+        if (!inner || inner < 60) {
+            return;   // hidden/zero-width layout cannot be measured
+        }
+        inner *= MUSHAF_FIT_SLACK;
+
+        const rows = [];
+        cards.forEach(function (card) {
+            card.querySelectorAll('.line-row').forEach(function (row) {
+                rows.push(row);
+            });
+        });
+        if (!rows.length) {
+            return;
+        }
+
+        /* A line width is affine in the glyph size: the glyphs scale with the
+           font, the words' own padding (2px each side) does not. Two
+           measurements solve each line's slope and fixed part, so the exact
+           size at which every line fits is known — the smallest one wins. */
+        holder.style.setProperty('--fs', MUSHAF_REF_SIZE + 'px');
+        const wide = rows.map(measureRowWidth);
+        holder.style.setProperty('--fs', MUSHAF_REF_SIZE / 2 + 'px');
+        const narrow = rows.map(measureRowWidth);
+
+        let size = Infinity;
+        for (let i = 0; i < rows.length; i += 1) {
+            const slope = (wide[i] - narrow[i]) / (MUSHAF_REF_SIZE / 2);
+            const fixed = wide[i] - slope * MUSHAF_REF_SIZE;
+            if (slope > 0.5) {
+                size = Math.min(size, (inner - fixed) / slope);
+            }
+        }
+        holder.style.removeProperty('--fs');
+        if (!isFinite(size)) {
+            return;
+        }
+        size = Math.max(10, Math.min(size, MUSHAF_MAX_SIZE));
+        holder.style.setProperty('--fs', size.toFixed(2) + 'px');
+
+        /* Glyph advances are rounded per size, so verify against the real
+           layout once; the nudge errs small on purpose. */
+        let widest = 0;
+        rows.forEach(function (row) {
+            widest = Math.max(widest, measureRowWidth(row));
+        });
+        if (widest > inner) {
+            size = Math.max(10, size * (inner / widest));
+            holder.style.setProperty('--fs', size.toFixed(2) + 'px');
+        }
+    }
+
+    /* Re-fit after a viewport change (rotation, window resize) or a late
+       font swap; queued so a drag of the window edge re-measures once. */
+    function refitMushafFlow() {
+        if (mushFitQueued) {
+            return;
+        }
+        mushFitQueued = true;
+        requestAnimationFrame(function () {
+            mushFitQueued = false;
+            if (!mushFlowHolder || !mushFlowHolder.isConnected) {
+                return;
+            }
+            fitMushafRows(mushFlowHolder);
+            fitCenteredRows(mushFlowHolder);
+        });
+    }
+
+    window.addEventListener('resize', refitMushafFlow);
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(refitMushafFlow, function () { });
+    }
+
     function buildMushafFlow(main, range) {
         const token = (mushRenderToken += 1);
         const holder = document.createElement('div');
         holder.className = 'mushaf-holder';
+        mushFlowHolder = holder;
         const loading = document.createElement('p');
         loading.className = 'range-note';
         loading.textContent = 'يُحمَّل المصحف…';
@@ -1555,6 +1662,7 @@
                     holder.appendChild(card);
                 }
             });
+            fitMushafRows(holder);
             fitCenteredRows(holder);
             /* words already settled in this session keep their look */
             for (let i = 0; i < items.length; i += 1) {
@@ -1572,6 +1680,9 @@
                flow so the session can still continue */
             if (holder.parentNode) {
                 holder.parentNode.removeChild(holder);
+            }
+            if (mushFlowHolder === holder) {
+                mushFlowHolder = null;
             }
             buildUthmaniFlow(main, range);
         });
