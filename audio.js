@@ -22,7 +22,9 @@
  *     also tells the worker how big the file is, so the audio byte budget
  *     keeps counting it and still trims the oldest listening first;
  *   - setSource() keeps the blob: URLs it creates alive for as long as the
- *     player is on them, and revokes them on the next switch.
+ *     player is on them, and revokes them on the next switch;
+ *   - enableFade() gives a player very short fades at both ends of every
+ *     file, so two consecutive verses join without a hard, audible cut.
  *
  * Nothing stored and no network leaves the plain URL: the player asks the
  * server itself and reports the failure the way it always did.
@@ -145,11 +147,88 @@
         element.src = src;
     }
 
+    /* A verse file ends and the next one starts right away; the instant cut
+     * between the two is audible. Both ends get a very short fade instead:
+     * the element is routed through one gain node that stays at 1 except
+     * during those few milliseconds, and everything is scheduled ahead on
+     * the audio clock (a hidden tab cannot delay it). FADE_MS is the knob. */
+    var FADE_MS = 60;
+    var fadeContext = null;
+    var fadeGains = new WeakMap();
+    var fadeOff = new WeakSet();
+    var fadeOn = new WeakSet();
+
+    function fadeGain(element) {
+        var gain = fadeGains.get(element);
+        if (gain || fadeOff.has(element)) return gain || null;
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) {
+            fadeOff.add(element);
+            return null;
+        }
+        try {
+            if (!fadeContext) fadeContext = new Ctx();
+            gain = fadeContext.createGain();
+            gain.connect(fadeContext.destination);
+            fadeContext.createMediaElementSource(element).connect(gain);
+            fadeGains.set(element, gain);
+            return gain;
+        } catch (error) {
+            fadeOff.add(element);   // the file plays on, just without fades
+            return null;
+        }
+    }
+
+    function resumeFadeContext() {
+        if (fadeContext && fadeContext.state !== 'running') {
+            fadeContext.resume().catch(function () { });
+        }
+    }
+
+    /* Shapes both ends of the current file: silence to 1 over the first
+     * moments, 1 back to silence over the last ones. */
+    function armFade(element) {
+        var gain = fadeGain(element);
+        if (!gain) return;
+        resumeFadeContext();
+        var now = fadeContext.currentTime;
+        var step = FADE_MS / 1000;
+        var rest = element.duration - element.currentTime;
+        var param = gain.gain;
+        param.cancelScheduledValues(now);
+        param.setValueAtTime(0, now);
+        param.linearRampToValueAtTime(1, now + step);
+        if (isFinite(rest) && rest > step * 2) {
+            param.setValueAtTime(1, now + rest - step);
+            param.linearRampToValueAtTime(0, now + rest);
+        }
+    }
+
+    function enableFade(element) {
+        if (fadeOn.has(element)) return;
+        fadeOn.add(element);
+        /* The context may only begin on a play; the first one follows a
+         * press, which is also what lets it resume after a tab switch. */
+        element.addEventListener('play', function () {
+            fadeGain(element);
+            resumeFadeContext();
+        });
+        /* Playback really started (buffering over): shape the ends. */
+        element.addEventListener('playing', function () {
+            armFade(element);
+        });
+        /* Seeking while it plays moves the end; shape it again. */
+        element.addEventListener('seeked', function () {
+            if (!element.paused) armFade(element);
+        });
+    }
+
     window.QuranAudio = {
         base: BASE,
         path: path,
         reciters: reciters,
         source: source,
-        setSource: setSource
+        setSource: setSource,
+        enableFade: enableFade
     };
 })();

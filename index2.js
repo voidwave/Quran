@@ -79,7 +79,7 @@ const PAGE_CACHE = 24;
 const SLOT_MARGIN = 6;
 
 /* A short breath between two files of the recitation. */
-const AYAH_GAP_MS = 250;
+const AYAH_GAP_MS = 0;
 
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
@@ -962,6 +962,8 @@ function syncBannerButtons() {
 function recitationAudio() {
     if (!recitation.audio) {
         recitation.audio = new Audio();
+        /* Very short fades hide the hard cut between two verse files. */
+        if (audioLib.enableFade) audioLib.enableFade(recitation.audio);
         recitation.audio.addEventListener('ended', () => advanceRecitation());
         recitation.audio.addEventListener('error', () => handleRecitationError());
         recitation.audio.addEventListener('play', syncListenButton);

@@ -92,7 +92,7 @@ const POSITION_SAVE_MS = 400;
 let positionTimer = null;
 
 /* A short breath between two ayah files. */
-const AYAH_GAP_MS = 250;
+const AYAH_GAP_MS = 0;
 
 var surasTashkeel;
 var surasClean;
@@ -576,6 +576,8 @@ function startTrack(surahIndex, fileNumber) {
 
     if (!audioPlayer) {
         audioPlayer = new Audio();
+        /* Very short fades hide the hard cut between two verse files. */
+        if (audioLib.enableFade) audioLib.enableFade(audioPlayer);
         audioPlayer.addEventListener('play', updatePlaybackUI);
         audioPlayer.addEventListener('pause', updatePlaybackUI);
         audioPlayer.addEventListener('ended', function () {
