@@ -64,6 +64,31 @@
             /* the shipped meta.json claims normalize_type "" but per-feature
                normalization is what actually decodes (verified 2026-09-17) */
             normalize: true
+        },
+        /* Muno459/fastconformer-quran v8 export (June 2026): plain CTC in a
+           single q8 session, logprobs (1, T', 1025) + 512-d encoder
+           features. ~2x better on real phone microphones than the v3 int8
+           export. NPL-1.1 — non-commercial; the weights are gated upstream,
+           so the site serves its mirror or the user drops the files in dir. */
+        'quran-v8-ctc': {
+            label: 'FastConformer Quran v8 (CTC q8) — تلاوة',
+            dir: 'tools/asr-models/fastconformer-quran-v8/',
+            fallbackDir: 'https://huggingface.co/voidwaveDev/fastconformer-quran/resolve/main/v8/',
+            encoderFile: 'model_with_encoder.q8.onnx',
+            tokensFile: 'tokens.txt',
+            ctc: true,
+            normalize: true
+        },
+        /* Same network at full precision (~458 MB): sharper logits (better
+           for the GOP confidence pass), heavier and slower on wasm. */
+        'quran-v8-fp32': {
+            label: 'FastConformer Quran v8 (CTC fp32) — تلاوة',
+            dir: 'tools/asr-models/fastconformer-quran-v8/',
+            fallbackDir: 'https://huggingface.co/voidwaveDev/fastconformer-quran/resolve/main/v8/',
+            encoderFile: 'model_with_encoder.onnx',
+            tokensFile: 'tokens.txt',
+            ctc: true,
+            normalize: true
         }
     };
 
@@ -377,6 +402,7 @@
         let decNames = null;
         let joinNames = null;
         let activeBase = null;         // resolved model source (local or fallback)
+        let ctcOut = null;             // CTC logprobs output name (v8 model)
 
         /**
          * Picks where the model files come from: the site's own copy when it
@@ -414,9 +440,32 @@
             const ep = opts.ep || 'auto';
             /* the int8 graphs use quantized ops that only the wasm kernels run */
             const providers = ep === 'webgpu' ? ['webgpu']
-                : (ep === 'wasm' || model.stateless) ? ['wasm'] : ['webgpu', 'wasm'];
+                : (ep === 'wasm' || model.stateless || model.ctc) ? ['wasm'] : ['webgpu', 'wasm'];
             const fits = { executionProviders: providers };
             const base = await resolveBase();
+            if (model.ctc) {
+                report('status', 'إنشاء جلسة FastConformer v8 (' + model.encoderFile + ')…');
+                try {
+                    encoder = await ort.InferenceSession.create(base + model.encoderFile, fits);
+                } catch (error) {
+                    throw new Error('تعذّر تحميل ملفات FastConformer v8 — تأكّد من تنزيل '
+                        + model.encoderFile + ' و tokens.txt (راجع QuranHifz/tools/fetch-asr-models.mjs)');
+                }
+                encNames = {
+                    audio: findInput(encoder.inputNames, 'audio', 0),
+                    length: findInput(encoder.inputNames, 'length', 1)
+                };
+                /* "model_with_encoder" exports logprobs + encoder_output;
+                   pick logprobs by name, fall back to the first output */
+                ctcOut = encoder.outputNames[0];
+                for (let i = 0; i < encoder.outputNames.length; i += 1) {
+                    if (String(encoder.outputNames[i]).toLowerCase().indexOf('logprob') !== -1) {
+                        ctcOut = encoder.outputNames[i];
+                        break;
+                    }
+                }
+                return;
+            }
             if (model.stateless) {
                 report('status', 'إنشاء جلسة المُرمِّز (encoder int8)…');
                 encoder = await ort.InferenceSession.create(base + model.encoderFile, fits);
@@ -509,6 +558,154 @@
                 }
             }
             return best;
+        }
+
+        /* ---- CTC (Muno459 v8 export, single q8 session) -------------------- */
+
+        async function transcribeCtc(samples, options) {
+            const started = Date.now();
+            const normalize = opts.normalize === undefined ? !!model.normalize : !!opts.normalize;
+            const feats = nemoFeatures(samples, normalize, opts.preemph);
+            const F = feats.data;
+            const T = feats.frames;
+            /* audio_signal: (1, 80, T) — transpose from (T, 80) */
+            const audio = new Float32Array(80 * T);
+            for (let t = 0; t < T; t += 1) {
+                for (let c = 0; c < 80; c += 1) {
+                    audio[c * T + t] = F[t * 80 + c];
+                }
+            }
+            const feeds = {};
+            feeds[encNames.audio] = tensorFor('audio', 'float32', audio, [1, 80, T]);
+            feeds[encNames.length] = tensorFor('len', 'int64', BigInt64Array.from([BigInt(T)]), [1]);
+            const out = await encoder.run(feeds);
+            const lp = out[ctcOut];
+            const dims = lp.dims;
+            /* (1, T', V) normally; (1, V, T') for transposed exports — the
+               vocab dimension is the one sized like the token table */
+            const vocab = idToToken.length + 1;   // + CTC blank (last class)
+            const layoutVT = Math.abs(dims[1] - vocab) < Math.abs(dims[2] - vocab);
+            const V = layoutVT ? dims[1] : dims[2];
+            const Tout = layoutVT ? dims[2] : dims[1];
+            const data = lp.data;
+            const blank = V - 1;
+            const tokens = [];
+            const wordsOut = [];
+            let prev = -1;
+            let openTok = null;
+            let curWord = null;
+            const finishWord = function (word) {
+                return {
+                    w: word.w,
+                    gop: +(word.sum / Math.max(1, word.weight)).toFixed(3),
+                    min: +(word.min === Infinity ? 0 : word.min).toFixed(3)
+                };
+            };
+            /* close the open token into the current word; a piece starting
+               with «▁» starts a new word */
+            const closeTok = function () {
+                if (!openTok) {
+                    return;
+                }
+                const piece = idToToken[openTok.id] || '';
+                /* pronunciation margin of this token: log P(token) minus the
+                   best OTHER non-blank at the token's peak frame. LARGER is
+                   clearer — a blurred letter or an ambivalent harakah pulls
+                   the runner-up close, so the margin collapses toward 0
+                   BEFORE the decoded TEXT changes */
+                const gop = openTok.peakOther > -Infinity ? openTok.peakLp - openTok.peakOther : 0;
+                const startsWord = piece.indexOf('\u2581') === 0;
+                if (!curWord || startsWord) {
+                    if (curWord) {
+                        wordsOut.push(finishWord(curWord));
+                    }
+                    curWord = {
+                        w: startsWord ? piece.replace(/^\u2581/, '') : piece,
+                        sum: 0,
+                        weight: 0,
+                        min: Infinity
+                    };
+                } else {
+                    curWord.w += piece;
+                }
+                curWord.sum += gop * openTok.count;
+                curWord.weight += openTok.count;
+                curWord.min = Math.min(curWord.min, gop);
+                openTok = null;
+            };
+            for (let t = 0; t < Tout; t += 1) {
+                let best = -1;
+                let bestV = -Infinity;
+                let otherV = -Infinity;
+                let blankV = -Infinity;
+                for (let v = 0; v < V; v += 1) {
+                    const value = layoutVT ? data[v * Tout + t] : data[t * V + v];
+                    if (v === blank) {
+                        blankV = value;
+                        continue;
+                    }
+                    if (value > bestV) {
+                        otherV = bestV;
+                        bestV = value;
+                        best = v;
+                    } else if (value > otherV) {
+                        otherV = value;
+                    }
+                }
+                const winner = bestV > blankV ? best : blank;
+                if (winner === blank) {
+                    closeTok();
+                    prev = blank;
+                    continue;
+                }
+                if (winner === prev && openTok && openTok.id === winner) {
+                    /* CTC collapse: the same token keeps winning; keep its
+                       peak frame (highest log P) for the margin */
+                    if (bestV > openTok.peakLp) {
+                        openTok.peakLp = bestV;
+                        openTok.peakOther = otherV;
+                    }
+                    openTok.count += 1;
+                    continue;
+                }
+                closeTok();
+                openTok = { id: winner, peakLp: bestV, peakOther: otherV, count: 1 };
+                tokens.push(winner);
+                prev = winner;
+            }
+            closeTok();
+            if (curWord) {
+                wordsOut.push(finishWord(curWord));
+            }
+            /* pronunciation check (tajweed GOP): when the caller supplies the
+               expected text, force-align it against the same logprobs and
+               grade every reference word (log P(expected) − best competitor
+               at each token's peak frame). Silence in the worker ⇒ skipped. */
+            let gopWords = null;
+            const gopLib = (typeof self !== 'undefined' && self.QuranGop) || null;
+            if (options && options.reference && gopLib) {
+                try {
+                    await gopLib.load();
+                    /* budget the alignment by what was actually heard: the
+                       expected text is only a candidate for these tokens;
+                       more would squeeze every interval (the rest frames 0) */
+                    const budget = tokens.length + Math.max(4, Math.round(tokens.length * 0.35));
+                    gopWords = gopLib.analyze(Tout, V, function (t, id) {
+                        return layoutVT ? data[id * Tout + t] : data[t * V + id];
+                    }, String(options.reference), budget);
+                } catch (error) {
+                    gopWords = null;
+                }
+            }
+            const text = detokenize(idToToken, tokens);
+            return {
+                text: text,
+                tokens: tokens.map(function (tk) { return idToToken[tk]; }),
+                words: wordsOut,
+                gopWords: gopWords,
+                ms: Date.now() - started,
+                info: { frames: T, outFrames: Tout, tokens: tokens.length, kind: 'ctc' }
+            };
         }
 
         /* ---- stateless (cache-free) int8 pipeline -------------------------- */
@@ -628,9 +825,12 @@
                 return { model: id, ms: Date.now() - t0 };
             },
 
-            transcribeSamples: async function (samples, sampleRate) {
+            transcribeSamples: async function (samples, options) {
                 if (!encoder) {
                     throw new Error('model not loaded');
+                }
+                if (model.ctc) {
+                    return transcribeCtc(samples, options);
                 }
                 if (model.stateless) {
                     return transcribeStateless(samples);

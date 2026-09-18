@@ -18,6 +18,7 @@
     const MAX_RANGE = 60;          // verses per session
     const HINT_REVEAL_DELAY_MS = 4500; // legacy constant; reveal is manual only now
     const MODEL_FLAG = 'quran-memorize-model'; // set once the model is cached
+    const WORD_AUDIO_BASE = 'https://verses.quran.com/'; // word-by-word recitation
 
     /* -----------------------------------------------------------------------
      * Elements + state
@@ -113,11 +114,14 @@
 
     function loadSettings() {
         const defaults = {
-            feedback: 'direct',
-            strictness: 'balanced',
+            feedback: 'hint',
             hideMode: 'blur',
             autoScroll: true,
             model: 'int8',
+            engine: 'phoneme',
+            /* which phoneme export the checker loads: 'v31-int8' (default)
+               or 'v31-fp32' — the Quran-Lab zipformer_p-arabic-v3.1 pair */
+            phonemeModel: 'v31-int8',
             viewVersion: 2,
             range: null
         };
@@ -134,6 +138,19 @@
                         merged.hideMode = 'blur';
                         merged.viewVersion = 2;
                     }
+                    /* one-time upgrade: the correction style default is now
+                       «تلميح أولًا» — existing sessions switch to it once. */
+                    if ((data.settings || {}).feedbackVersion !== 2) {
+                        merged.feedback = 'hint';
+                        merged.feedbackVersion = 2;
+                    }
+                    /* the phoneme checker ships the Quran-Lab v3.1 exports
+                       only now; any older saved choice maps to int8 */
+                    merged.phonemeModel = (data.settings || {}).phonemeModel === 'v31-fp32'
+                        ? 'v31-fp32' : 'v31-int8';
+                    /* the engine choice is phoneme (default) or int8 only now;
+                       a saved v8/v8fp32 (or anything else) becomes phoneme */
+                    merged.engine = merged.engine === 'int8' ? 'int8' : 'phoneme';
                     return merged;
                 }
             }
@@ -146,10 +163,12 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify({
                 settings: {
                     feedback: settings.feedback,
-                    strictness: settings.strictness,
+                    feedbackVersion: 2,
                     hideMode: settings.hideMode,
                     autoScroll: settings.autoScroll,
                     model: settings.model,
+                    engine: settings.engine,
+                    phonemeModel: settings.phonemeModel === 'v31-fp32' ? 'v31-fp32' : 'v31-int8',
                     viewVersion: 2
                 },
                 range: currentRange
@@ -271,6 +290,13 @@
                 span.title = 'أعد المحاولة — أو اضغط لإظهار الكلمة';
                 break;
         }
+
+        /* a pronunciation note that waited for the word to become visible */
+        if (state !== 'pending' && pronNotes[index]) {
+            const pendingNotes = pronNotes[index];
+            delete pronNotes[index];
+            markCheckerNote(index, pendingNotes);
+        }
     }
 
     function hintText(item) {
@@ -349,6 +375,517 @@
     }
 
     /* -----------------------------------------------------------------------
+     * Pronunciation checker (phoneme zipformer — optional, off by default)
+     * -------------------------------------------------------------------- */
+
+    /* The phoneme model renders the recited speech as vowel-carrying units
+       («مَ اا لِ كِ…»). They are aligned with the canonical units of the aya
+       under the caret (QuranText/QuranPhonemes via QuranPhonemeCheck) and the
+       deviations become notes on the words. The int8 tracker stays the
+       source of truth for progress — the checker only annotates. */
+
+    const PRON_SCRIPT_SRC = (document.currentScript && document.currentScript.src) || location.href;
+    let pronWorker = null;
+    let pronReady = null;
+    let pronLoadResolve = null;
+    let pronLoadReject = null;
+    let pronBusy = false;
+    let pronLoaded = false;   // true once the worker reported 'ready'
+    let pronModelActive = null;   // which export the worker actually loaded
+    const pronNotes = {};   // item index -> notes waiting for the word to show
+
+    /* The worker hosts one export at a time; the page picks which. */
+    function phonemeModelId() {
+        return settings.phonemeModel === 'v31-fp32' ? 'arabic-v3-fp32' : 'arabic-v3';
+    }
+
+    function setPronStatus(text) {
+        if (els.pronStatus) {
+            els.pronStatus.textContent = text;
+        }
+    }
+
+    function ensurePronWorker() {
+        if (pronWorker) {
+            return pronWorker;
+        }
+        if (!window.QuranPhonemeCheck || typeof Worker === 'undefined') {
+            return null;
+        }
+        try {
+            pronWorker = new Worker(new URL('phoneme-asr-worker.js', PRON_SCRIPT_SRC));
+        } catch (error) {
+            setPronStatus('تعذّر تشغيل مدقّق النطق');
+            return null;
+        }
+        pronWorker.onmessage = onPronMessage;
+        pronWorker.onerror = function () {
+            setPronStatus('تعذّر تشغيل مدقّق النطق');
+            pronReady = null;
+            pronLoaded = false;
+        };
+        return pronWorker;
+    }
+
+    /* Loads the model once (~75 MB int8 — cached by the browser afterwards). */
+    function ensurePronModel() {
+        if (settings.engine !== 'phoneme') {
+            return null;
+        }
+        const worker = ensurePronWorker();
+        if (!worker) {
+            return null;
+        }
+        if (pronReady) {
+            return pronReady;
+        }
+        setPronStatus('…جارٍ تحميل نموذج الفونيمات (٧٢ م.ب — مرة واحدة)');
+        pronReady = new Promise(function (resolve, reject) {
+            pronLoadResolve = resolve;
+            pronLoadReject = reject;
+            worker.postMessage({ type: 'load', model: phonemeModelId() });
+        });
+        pronReady.catch(function () {
+            pronReady = null;
+            pronLoadResolve = null;
+            pronLoadReject = null;
+        });
+        return pronReady;
+    }
+
+    /** Drops the loaded phoneme export and loads the chosen one. The worker
+     *  hosts a single model per worker, so a switch restarts it — the weights
+     *  are cached by the browser, so this costs a second or two. */
+    function switchPhonemeModel(value) {
+        const next = value === 'v31-fp32' ? 'v31-fp32' : 'v31-int8';
+        const wanted = next === 'v31-fp32' ? 'arabic-v3-fp32' : 'arabic-v3';
+        settings.phonemeModel = next;
+        if (pronWorker && pronModelActive === wanted) {
+            return;   /* the worker already hosts the chosen export */
+        }
+        if (pronWorker) {
+            pronWorker.terminate();
+            pronWorker = null;
+        }
+        pronReady = null;
+        pronLoaded = false;
+        pronModelActive = null;
+        pronLoadResolve = null;
+        pronLoadReject = null;
+        if (settings.engine === 'phoneme') {
+            ensurePronModel();
+        }
+    }
+
+    function onPronMessage(event) {
+        const message = event.data || {};
+        if (message.type === 'status') {
+            setPronStatus(message.message);
+        } else if (message.type === 'ready') {
+            pronLoaded = true;
+            pronModelActive = message.model || null;
+            if (pronLoadResolve) {
+                pronLoadResolve(true);
+                pronLoadResolve = null;
+                pronLoadReject = null;
+            }
+            setPronStatus(pronModelActive === 'arabic-v3-fp32'
+                ? 'مدقّق التجويد جاهز — نموذج v3.1 fp32: يتحقق من الحركات والمدود مع التلاوة'
+                : 'مدقّق التجويد جاهز — نموذج v3.1 int8: يتحقق من الحركات والمدود مع التلاوة');
+        } else if (message.type === 'error') {
+            if (pronLoadReject) {
+                pronLoadReject(new Error(message.message || 'phoneme error'));
+                pronLoadResolve = null;
+                pronLoadReject = null;
+            }
+            setPronStatus('تعذّر مدقّق النطق: ' + (message.message || ''));
+        } else if (message.type === 'phonemes') {
+            pronBusy = false;
+            try {
+                handlePhonemes(message);
+            } catch (error) { /* التحليل اختياري */ }
+        } else if (message.type === 'stream-units') {
+            try {
+                streamUnitsReceived(message);
+            } catch (error) { /* التحليل اختياري */ }
+        } else if (message.type === 'stream-end') {
+            phonStreamStarted = false;
+        }
+    }
+
+    /* Aligns the heard units with the canonical units of the aya under the
+       caret (plus the next one, for recitation that runs on). */
+    function handlePhonemes(message) {
+        if (settings.engine !== 'phoneme' || !tracker || !suras || !window.QuranPhonemeCheck) {
+            return;
+        }
+        const units = message.units || [];
+        if (!units.length) {
+            return;
+        }
+        if (settings.engine === 'phoneme') {
+            /* show what the phoneme engine heard */
+            setHeard(units.join(' '));
+        }
+        analyzeAndApply(units);
+    }
+
+    /* Aligns one unit sequence with the aya under the caret (plus the next
+       one) and applies settlements + notes. Resolves {consumed, settled} —
+       how many heard units belong to settled words (the stream trims those). */
+    function analyzeAndApply(units) {
+        if (!tracker || !suras || !window.QuranPhonemeCheck) {
+            return Promise.resolve(null);
+        }
+        let index = tracker.cursor;
+        while (index < items.length && items[index].meta) {
+            index += 1;
+        }
+        const item = items[index];
+        if (!item) {
+            return Promise.resolve(null);
+        }
+        const sura = item.s;
+        const wanted = [item.a];
+        if (item.a + 1 <= verseCount(sura)) {
+            wanted.push(item.a + 1);
+        }
+        return Promise.all(wanted.map(function (aya) {
+            return QuranPhonemeCheck.canonFor(sura, aya);
+        })).then(function (canons) {
+            const entries = [];
+            canons.forEach(function (canon, i) {
+                if (!canon) {
+                    return;
+                }
+                if (i === 0 && item.wi > 0 && canon.lens && canon.lens[item.wi] !== undefined) {
+                    /* start the alignment at the word under the caret: keeping
+                       the earlier words let a repeated word (e.g. the second
+                       «عَلَيْهِمْ» of 1:7) tie with its EARLIER occurrence,
+                       and the earliest-position preference then stole its
+                       units — the frontier word never saw them */
+                    const skip = canon.lens.slice(0, item.wi).reduce(function (a, b) { return a + b; }, 0);
+                    entries.push({
+                        s: sura,
+                        a: wanted[i],
+                        canon: {
+                            clusters: canon.clusters.slice(skip),
+                            lens: canon.lens.slice(item.wi),
+                            bismillah: canon.bismillah
+                        },
+                        wiOffset: item.wi
+                    });
+                    return;
+                }
+                entries.push({ s: sura, a: wanted[i], canon: canon });
+            });
+            if (!entries.length) {
+                return null;
+            }
+            const sequence = QuranPhonemeCheck.buildSequence(entries);
+            const result = QuranPhonemeCheck.analyzeSequence(sequence, units);
+            if (!result) {
+                return null;
+            }
+            const settled = settlePhonemeWords(result);
+            if (result.flags.length) {
+                applyPronunciationFlags(result.flags, settled);
+            }
+            logPhonemeSession(units, result, settled);
+            return { consumed: consumedUnits(result), settled: settled };
+        }).catch(function () { return null; /* المقارنة اختيارية */ });
+    }
+
+    /* How many leading heard units can be dropped: everything up to the last
+       unit that aligned to an ALREADY-PASSED word (before the cursor). The
+       word under the cursor and everything after keep their units — those
+       are the evidence for settling. Without this, repeating an already
+       settled phrase leaves duplicate units that jam every later alignment. */
+    function consumedUnits(result) {
+        if (!result || !result.words || !tracker) {
+            return 0;
+        }
+        let consumed = 0;
+        result.words.forEach(function (word) {
+            if (word.hTo === undefined || word.hTo === null) {
+                return;
+            }
+            let index = -1;
+            for (let i = 0; i < items.length; i += 1) {
+                const candidate = items[i];
+                if (!candidate.meta && candidate.s === word.ref.s &&
+                    candidate.a === word.ref.a && candidate.wi === word.ref.wi) {
+                    index = i;
+                    break;
+                }
+            }
+            if (index >= 0 && index < tracker.cursor) {
+                consumed = Math.max(consumed, word.hTo + 1);
+            }
+        });
+        return consumed;
+    }
+
+    /* ---- continuous stream (phoneme-only engine) ------------------------- */
+
+    let phonStreamStarted = false;
+    let phonStreamUnits = [];
+    let phonStreamAligning = false;
+
+    /* Every raw mic frame goes straight to the worker; the model decodes it
+       as it arrives (streaming zipformer), so words settle while reciting —
+       no utterance segmentation, no lost word starts. */
+    function maybeStreamFrame(frame) {
+        if (settings.engine !== 'phoneme' || !tracker) {
+            return;
+        }
+        if (!pronReady) {
+            ensurePronModel();   // kick the load; frames are skipped meanwhile
+            return;
+        }
+        if (!pronWorker) {
+            return;
+        }
+        if (!phonStreamStarted) {
+            phonStreamStarted = true;
+            phonStreamUnits = [];
+            phonStreamAligning = false;
+            setHeard('');
+            pronWorker.postMessage({ type: 'stream', action: 'start' });
+        }
+        const copy = frame.slice();
+        pronWorker.postMessage({ type: 'stream', action: 'audio', audio: copy }, [copy.buffer]);
+    }
+
+    function streamUnitsReceived(message) {
+        phonStreamUnits = phonStreamUnits.concat(message.units || []);
+        setHeard(phonStreamUnits.slice(-12).join(' '));
+        if (phonStreamAligning) {
+            return;
+        }
+        phonStreamAligning = true;
+        analyzeAndApply(phonStreamUnits).then(function (outcome) {
+            phonStreamAligning = false;
+            if (!outcome) {
+                return;
+            }
+            if (outcome.consumed > 0) {
+                phonStreamUnits.splice(0, outcome.consumed);
+            }
+            if (phonStreamUnits.length > 80) {
+                /* safety cap — junk that never aligns must not grow forever */
+                phonStreamUnits.splice(0, phonStreamUnits.length - 80);
+            }
+        }).catch(function () {
+            phonStreamAligning = false;
+        });
+    }
+
+    function stopPhonemeStream() {
+        if (phonStreamStarted && pronWorker) {
+            pronWorker.postMessage({ type: 'stream', action: 'end' });
+        }
+        phonStreamStarted = false;
+        phonStreamUnits = [];
+        phonStreamAligning = false;
+    }
+
+    /* Decode the pending tail right away — called when the VAD hears the end
+       of speech, so the last word of an utterance (often its final letters,
+       e.g. «…م دُ») shows up the moment the reciter pauses instead of
+       waiting for the next audio to fill a decode window. */
+    function flushPhonemeStream() {
+        if (phonStreamStarted && pronWorker) {
+            pronWorker.postMessage({ type: 'stream', action: 'flush' });
+        }
+    }
+
+    /* Session trail for the phoneme engine (dev): the last 60 utterances —
+       what it heard, which words settled, and where the cursor is. Inspect
+       with JSON.parse(localStorage.getItem('quran-phoneme-log')). */
+    function logPhonemeSession(units, result, settled) {
+        try {
+            const trail = JSON.parse(localStorage.getItem('quran-phoneme-log') || '[]');
+            trail.push({
+                at: new Date().toISOString(),
+                units: units.join(' '),
+                stats: result ? result.stats : null,
+                words: result ? result.words.map(function (word) {
+                    const key = word.ref.s + ':' + word.ref.a + ':' + word.ref.wi;
+                    const errors = word.bad + word.miss;
+                    return key + (settled[key] ? (errors ? '=ok(' + errors + ')' : '=ok') : '!' + errors);
+                }) : null,
+                cursor: tracker ? tracker.cursor : null
+            });
+            while (trail.length > 60) {
+                trail.shift();
+            }
+            localStorage.setItem('quran-phoneme-log', JSON.stringify(trail));
+        } catch (error) { /* storage unavailable */ }
+    }
+
+    const PRON_LABELS = {
+        letter: 'حرف مخالف',
+        vowel: 'حركة مخالفة',
+        shadda: 'شدة ناقصة',
+        missing: 'حرف لم يُسمع',
+        confidence: 'نطق غير واضح (ثقة منخفضة)'
+    };
+
+    function describePronNote(note) {
+        const label = PRON_LABELS[note.kind] || note.kind;
+        if (note.heard) {
+            return label + ' (المتوقع «' + note.expected + '» — سُمع «' + note.heard + '»)';
+        }
+        return label + ' (المتوقع «' + note.expected + '»)';
+    }
+
+    function markCheckerNote(index, notes) {
+        const span = spans[index];
+        if (!span) {
+            return;
+        }
+        span.classList.add('is-pronounce');
+        const text = 'مدقّق النطق — ' + notes.map(describePronNote).join('؛ ');
+        span.title = span.title ? span.title + '\n' + text : text;
+    }
+
+    /* Phoneme-only mode: a word every unit of which was heard — cleanly or
+       with minor notes — settles the tracker (the chain rule lives in
+       core.settleWords). Guards: at least HALF the word's units must have
+       matched exactly (weak sound-alikes must not carry the recitation
+       forward), and small deviations settle WITH a note only when they add
+       up; a single blurred unit settles quietly. Returns the set of words
+       the TRACKER actually settled (chain-limited!) — the stream trims
+       only those units. */
+    function settlePhonemeWords(result) {
+        if (settings.engine !== 'phoneme' || !tracker || !result || !result.words) {
+            return {};
+        }
+        /* evaluate every aligned word */
+        const evals = [];
+        result.words.forEach(function (word) {
+            const accounted = word.seen + (word.lead || 0) >= word.total;
+            const halfExact = word.exact * 2 >= word.total;
+            const errors = word.bad + word.miss;
+            const allowed = word.total <= 2 ? 0 : (word.total <= 4 ? 1 : 2);
+            let state = 'fail';
+            if (accounted && halfExact) {
+                state = errors <= allowed ? 'clean' : (errors <= allowed + 1 ? 'near' : 'fail');
+            }
+            if (state === 'fail') {
+                return;
+            }
+            for (let i = 0; i < items.length; i += 1) {
+                const candidate = items[i];
+                if (!candidate.meta && candidate.s === word.ref.s &&
+                    candidate.a === word.ref.a && candidate.wi === word.ref.wi) {
+                    evals.push({ index: i, state: state });
+                    break;
+                }
+            }
+        });
+        if (!evals.length) {
+            return {};
+        }
+        evals.sort(function (a, b) { return a - b.index; });
+        /* a near-miss word (the model blurred one unit too many) rides on the
+           clean run after it — evidence that the reciter is really here —
+           instead of freezing the whole recitation. Its notes stay visible. */
+        const pass = [];
+        for (let i = evals.length - 1; i >= 0; i -= 1) {
+            const entry = evals[i];
+            let qualifies = entry.state === 'clean';
+            if (!qualifies && entry.state === 'near' && i + 1 < evals.length) {
+                const next = evals[i + 1];
+                const adjacent = next.index === entry.index + 1
+                    || (next.index === entry.index + 2 && items[entry.index + 1] && items[entry.index + 1].meta);
+                if (adjacent && pass[i + 1]) {
+                    qualifies = true;
+                }
+            }
+            pass[i] = qualifies;
+        }
+        const wanted = [];
+        evals.forEach(function (entry, i) {
+            if (pass[i]) {
+                wanted.push(entry.index);
+            }
+        });
+        if (!wanted.length) {
+            return {};
+        }
+        wanted.sort(function (a, b) { return a - b; });
+        const outcome = tracker.settleWords(wanted);
+        applyOps(outcome.ops);
+        const settled = {};
+        outcome.settled.forEach(function (index) {
+            const item = items[index];
+            settled[item.s + ':' + item.a + ':' + item.wi] = true;
+        });
+        return settled;
+    }
+
+    function applyPronunciationFlags(flags, settled) {
+        const marked = [];
+        flags.forEach(function (flag) {
+            const notes = flag.notes.filter(function (note) {
+                return QuranPhonemeCheck.MARK_KINDS[note.kind];
+            });
+            if (!notes.length) {
+                return;
+            }
+            let index = -1;
+            for (let i = 0; i < items.length; i += 1) {
+                const candidate = items[i];
+                if (!candidate.meta && candidate.s === flag.ref.s &&
+                    candidate.a === flag.ref.a && candidate.wi === flag.ref.wi) {
+                    index = i;
+                    break;
+                }
+            }
+            if (index < 0) {
+                return;
+            }
+            if (index > tracker.cursor) {
+                /* a word PAST the one the reciter is working on: the tail of
+                   the alignment often grazes later words (the next verse
+                   repeats endings like «عَلَيْهِمْ» or «ٱلَّذِينَ»), and
+                   annotating them points at a verse not reached yet */
+                return;
+            }
+            const key = flag.ref.s + ':' + flag.ref.a + ':' + flag.ref.wi;
+            const blocking = settings.engine === 'phoneme'
+                && !(settled && settled[key])
+                && notes.some(function (note) {
+                    return note.kind === 'letter' || note.kind === 'missing';
+                });
+            if (blocking) {
+                /* phoneme-only: a wrong letter keeps the word unresolved —
+                   show it as a mistake so the retry is obvious */
+                markMistake(index);
+            } else if (notes.length < 2) {
+                /* one minor deviation (a vowel the model blurred) — settle
+                   quietly instead of dotting correctly recited words */
+                return;
+            }
+            if (wordState[index] === 'pending') {
+                /* the word is still hidden: hold the note until it shows */
+                pronNotes[index] = notes;
+            } else {
+                markCheckerNote(index, notes);
+            }
+            marked.push(items[index].raw);
+        });
+        if (marked.length) {
+            const head = marked.slice(0, 2).map(function (word) {
+                return '«' + word + '»';
+            }).join(' و');
+            flashStatus('مدقّق النطق: راجع ' + head + (marked.length > 2 ? ' وغيرها' : ''));
+        }
+    }
+
+    /* -----------------------------------------------------------------------
      * Ops from the tracker
      * -------------------------------------------------------------------- */
 
@@ -364,7 +901,7 @@
                     setWordState(op.i, 'ok');
                     break;
                 case 'weak':
-                    setWordState(op.i, settings.strictness === 'lenient' ? 'ok' : 'unclear');
+                    setWordState(op.i, 'unclear');
                     break;
                 case 'sub':
                     /* the tracker never settles this word: red box, keep
@@ -381,16 +918,12 @@
                     flashWord(op.i);
                     break;
                 case 'pronounce':
-                    if (settings.strictness !== 'lenient') {
-                        markPronunciation(op.i, op.expected, op.heard);
-                    }
+                    markPronunciation(op.i, op.expected, op.heard);
                     break;
                 case 'ending':
                     /* a right word with a misheard ending («الصالحين» for
                        «الصالحات»): settle it, but point at the ending */
-                    if (settings.strictness !== 'lenient') {
-                        markEnding(op.i, op.heard);
-                    }
+                    markEnding(op.i, op.heard);
                     break;
                 case 'extra':
                     break;
@@ -564,6 +1097,9 @@
         wordState = new Array(items.length).fill('pending');
         tracker = Core.createTracker(items);
         currentItem = -1;
+        Object.keys(pronNotes).forEach(function (key) {
+            delete pronNotes[key];
+        });
 
         buildDom(range);
         setStatus(baseStatus());
@@ -653,7 +1189,70 @@
     }
 
     /* -----------------------------------------------------------------------
-     * Practice interactions (tap to reveal / hint)
+     * Word pronunciation (one tap on a revealed word)
+     * -------------------------------------------------------------------- */
+
+    let wordAudio = null;
+
+    /* quran.com's word-by-word files merge a few printed word pairs into a
+       single file («بَعْدَ مَا» in 2:181, 8:6 and 13:37, «إِلْ يَاسِينَ» in
+       37:130 — the only merges in the whole Quran, verified against the
+       mushaf page data for all 6,236 verses). Both words of a pair play the
+       merged file, and every word after the pair shifts back by one number. */
+    const WBW_MERGES = {
+        '2:181': [[3, 4]],
+        '8:6': [[4, 5]],
+        '13:37': [[8, 9]],
+        '37:130': [[3, 4]]
+    };
+
+    function pad3(value) {
+        return String(value).padStart(3, '0');
+    }
+
+    /* The quran.com file number of an item (item.wbw adjusted for merges). */
+    function wordAudioNumber(item) {
+        const merges = WBW_MERGES[item.s + ':' + item.a];
+        if (!merges) {
+            return item.wbw;
+        }
+        let extra = 0;
+        for (let i = 0; i < merges.length; i += 1) {
+            const first = merges[i][0];
+            const last = merges[i][1];
+            if (item.wbw > last) {
+                extra += last - first;      // the pair collapsed one number
+            } else if (item.wbw >= first) {
+                return first - extra;       // inside the pair → the merged file
+            } else {
+                break;
+            }
+        }
+        return item.wbw - extra;
+    }
+
+    /* Plays the word's pronunciation from the same files the mushaf view
+       uses («سماع الكلمة»). Returns false when there is no file (standalone
+       waqf signs, which are never clickable anyway). */
+    function playWordAudio(index) {
+        const item = items[index];
+        if (!item || item.meta || !item.wbw) {
+            return false;
+        }
+        const file = 'wbw/' + pad3(item.s) + '_' + pad3(item.a) + '_'
+            + pad3(wordAudioNumber(item)) + '.mp3';
+        if (!wordAudio) {
+            wordAudio = new Audio();
+        }
+        wordAudio.src = WORD_AUDIO_BASE + file;
+        wordAudio.play().catch(function () {
+            showToast('تعذّر تشغيل تلاوة الكلمة.');
+        });
+        return true;
+    }
+
+    /* -----------------------------------------------------------------------
+     * Practice interactions (tap to reveal / hint / listen)
      * -------------------------------------------------------------------- */
 
     function onMainClick(event) {
@@ -672,6 +1271,9 @@
         } else if (state === 'hint' || state === 'errHint' || state === 'err-hint') {
             clearRevealTimer(index);
             manualReveal(index);
+        } else if (playWordAudio(index)) {
+            /* a revealed word: one more tap plays its pronunciation */
+            flashWord(index);
         }
     }
 
@@ -747,6 +1349,12 @@
     }
 
     function deviceLabel(info) {
+        if (info && info.dtype === 'v8fp32') {
+            return 'FastConformer v8 fp32';
+        }
+        if (info && info.dtype === 'v8') {
+            return 'FastConformer v8';
+        }
         if (info && info.dtype === 'int8') {
             return 'FastConformer int8';
         }
@@ -805,8 +1413,16 @@
                     }
                     setStatus('النموذج جاهز (' + deviceLabel(info) + ') — اضغط الميكروفون للتلاوة');
                 },
-                transcript: function (text) {
-                    commitTranscript(text);
+                transcript: function (text, meta) {
+                    commitTranscript(text, meta);
+                },
+                utterance: function (samples) {
+                    if (settings.engine === 'phoneme') {
+                        flushPhonemeStream();
+                    }
+                },
+                frame: function (frame) {
+                    maybeStreamFrame(frame);
                 },
                 error: function (message) {
                     running = false;
@@ -819,6 +1435,9 @@
                     }
                 }
             });
+            /* the v8 engines also grade the expected words against the audio
+               (tajweed GOP) — feed them the upcoming reference text */
+            asr.setReferenceProvider(buildReference);
         }
         return asr;
     }
@@ -832,9 +1451,24 @@
             setStatus('محرّك التعرّف المحلي غير متاح');
             return;
         }
-        setStatus(modelCached() || modelReady
-            ? 'جارٍ تشغيل الميكروفون…'
-            : 'جارٍ تجهيز المحرّك (التنزيل يحدث مرة واحدة فقط)…');
+        if (settings.engine === 'phoneme') {
+            /* phoneme-only: mic + VAD here, units decoded by the checker
+               worker; the int8 model never loads in this mode */
+            engineInstance.setCaptureOnly(true);
+            /* raw capture — the model is trained on clean audio and the
+               browser's noise suppression/AGC mangle the phonemes */
+            engineInstance.setMicClean(true);
+            ensurePronModel();
+            setStatus('جارٍ تشغيل الميكروفون…');
+        } else {
+            engineInstance.setCaptureOnly(false);
+            engineInstance.setMicClean(false);
+            /* keep the live engine in step with the chosen recognizer */
+            engineInstance.setEngineKind(asrKind()).catch(function () { });
+            setStatus(modelCached() || modelReady
+                ? 'جارٍ تشغيل الميكروفون…'
+                : 'جارٍ تجهيز المحرّك (التنزيل يحدث مرة واحدة فقط)…');
+        }
         /* start() loads the recognizer first (int8) and then asks for the
            microphone — no separate ensureModel call is needed. */
         engineInstance.start().then(function () {
@@ -862,6 +1496,7 @@
 
     function stopListening() {
         running = false;
+        stopPhonemeStream();
         if (asr) {
             asr.stop();
         }
@@ -894,7 +1529,92 @@
         } catch (error) { /* storage unavailable */ }
     }
 
-    function commitTranscript(text) {
+    /* v8 engines: the CTC worker force-aligns the EXPECTED text against its
+       own log-probabilities and reports per reference word the worst token
+       margin (tajweed GOP semantics). MEASURED LIMIT (2026-09-18): on clean
+       reciter audio the reference tokenization often differs from the
+       model's natural piece segmentation («َّ» vs «ّ»+«َحْ» …), so perfect
+       recitation still produces −20-size margins on some words — the metric
+       has no separation yet. The values still travel in the transcript meta
+       (meta.gopWords) for future calibration; the dotting threshold stays
+       unreachable on purpose so no correct word is ever flagged. */
+    const V8_GOP_WRONG = -1e9;
+
+    let lastReference = null;      /* { text, startIndex, counts } for the in-flight decode */
+
+    /** Expected words for the next utterance: from the tracker cursor up to a
+        sensible horizon. The recognizer needs the same text the reciter is
+        about to say — words already settled are left out. */
+    function buildReference() {
+        if (!tracker) {
+            return null;
+        }
+        const start = tracker.cursor;
+        const words = [];
+        const counts = [];
+        for (let i = start; i < items.length && words.length < 60; i += 1) {
+            const parts = String(items[i].raw || '').split(' ').filter(Boolean);
+            counts.push(parts.length);
+            parts.forEach(function (part) {
+                if (words.length < 60) {
+                    words.push(part);
+                }
+            });
+        }
+        if (!words.length) {
+            return null;
+        }
+        return { text: words.join(' '), startIndex: start, counts: counts };
+    }
+
+    /** Dots the words whose GOP fell into the «wrong» band. */
+    function applyGopNotes(meta) {
+        if (settings.engine !== 'v8' && settings.engine !== 'v8fp32') {
+            return;
+        }
+        if (!meta || !meta.gopWords || !meta.gopWords.length || !lastReference) {
+            return;
+        }
+        const ref = lastReference;
+        const flagged = [];
+        let index = ref.startIndex;
+        let within = 0;
+        for (let i = 0; i < meta.gopWords.length && index < items.length; i += 1) {
+            while (index < items.length && within >= ref.counts[index - ref.startIndex]) {
+                index += 1;
+                within = 0;
+            }
+            if (index >= items.length) {
+                break;
+            }
+            const entry = meta.gopWords[i];
+            const item = items[index];
+            within += 1;
+            if (!item || item.meta || !entry || !(entry.frames > 0)) {
+                continue;
+            }
+            if (typeof entry.min === 'number' && entry.min < V8_GOP_WRONG) {
+                flagged.push({ index: index, gop: entry.min });
+            }
+        }
+        if (!flagged.length) {
+            return;
+        }
+        flagged.forEach(function (entry) {
+            const notes = [{ kind: 'confidence' }];
+            if (wordState[entry.index] === 'pending') {
+                pronNotes[entry.index] = notes;
+            } else {
+                markCheckerNote(entry.index, notes);
+            }
+        });
+        const head = flagged.slice(0, 2).map(function (entry) {
+            return '«' + items[entry.index].raw + '»';
+        }).join(' و');
+        flashStatus('مدقّق النطق: نطق غير واضح في ' + head + (flagged.length > 2 ? ' وغيرها' : ''));
+    }
+
+    function commitTranscript(text, meta) {
         if (!tracker) {
             return;
         }
@@ -909,6 +1629,7 @@
         const ops = tracker.finalize(text);
         applyOps(ops);
         logSession(text, ops);
+        applyGopNotes(meta);
         const words = Core.tokenize(text);
         if (ops.some(function (op) { return op.op === 'lowconf'; })) {
             // Say back what was actually heard — the clearest way to explain
@@ -1048,11 +1769,6 @@
             });
         });
 
-        els.strictnessSelect.addEventListener('change', function () {
-            settings.strictness = els.strictnessSelect.value;
-            saveState();
-        });
-
         els.hideModeSelect.addEventListener('change', function () {
             settings.hideMode = els.hideModeSelect.value;
             for (let i = 0; i < wordState.length; i += 1) {
@@ -1067,6 +1783,28 @@
             settings.autoScroll = els.autoscrollCheck.checked;
             saveState();
         });
+        if (els.phonemeModelSelect) {
+            els.phonemeModelSelect.addEventListener('change', function () {
+                switchPhonemeModel(els.phonemeModelSelect.value);
+                saveState();
+            });
+        }
+        if (els.engineSelect) {
+            els.engineSelect.addEventListener('change', function () {
+                settings.engine = els.engineSelect.value;
+                saveState();
+                stopListening();
+                if (settings.engine === 'phoneme') {
+                    ensurePronModel();
+                    setStatus('محرّك الفونيمات — اضغط الميكروفون لبدء التلاوة');
+                } else {
+                    if (asr) {
+                        asr.setEngineKind('int8').catch(function () { });
+                    }
+                    setStatus(baseStatus());
+                }
+            });
+        }
 
         els.themeToggle.addEventListener('click', function () {
             const root = document.documentElement;
@@ -1098,14 +1836,26 @@
         });
     }
 
+    /* The word-recognition family. The page offers phoneme mode (its own
+       engine) and the int8 FastConformer; this returns the FastConformer
+       kind for the non-phoneme path (the v8 exports stay dormant code). */
+    function asrKind() {
+        return 'int8';
+    }
+
     function syncSettingsUI() {
         document.querySelectorAll('input[name="feedback"]').forEach(function (radio) {
             radio.checked = radio.value === settings.feedback;
         });
         updateSegmented();
-        els.strictnessSelect.value = settings.strictness;
         els.hideModeSelect.value = settings.hideMode;
         els.autoscrollCheck.checked = Boolean(settings.autoScroll);
+        if (els.phonemeModelSelect) {
+            els.phonemeModelSelect.value = settings.phonemeModel === 'v31-fp32' ? 'v31-fp32' : 'v31-int8';
+        }
+        if (els.engineSelect) {
+            els.engineSelect.value = settings.engine;
+        }
     }
 
     /* -----------------------------------------------------------------------
@@ -1131,19 +1881,26 @@
             appbar: document.getElementById('button-container'),
             toolsToggle: document.getElementById('tools-toggle'),
             supportNotice: document.getElementById('mic-support-notice'),
-            strictnessSelect: document.getElementById('strictness-select'),
             hideModeSelect: document.getElementById('hide-mode-select'),
-            autoscrollCheck: document.getElementById('autoscroll-check')
+            autoscrollCheck: document.getElementById('autoscroll-check'),
+            engineSelect: document.getElementById('engine-select'),
+            phonemeModelSelect: document.getElementById('phoneme-model-select'),
+            pronStatus: document.getElementById('proncheck-status')
         };
 
         wireUI();
         syncSettingsUI();
         updateSupportNotice();
-        /* FastConformer int8 is the recognizer; nothing downloads before the
-           first mic press (loadNow=false only records the choice). */
+        /* FastConformer (int8 or v8) is the recognizer; nothing downloads
+           before the first mic press (loadNow=false only records the choice). */
         const bootEngine = ensureAsr();
         if (bootEngine) {
-            bootEngine.setEngineKind('int8', false);
+            bootEngine.setEngineKind(asrKind(), false);
+        }
+        if (settings.engine === 'phoneme') {
+            /* the phoneme engine is the recognizer, not an add-on: start the
+               one-time model load right away so the mic is ready sooner */
+            ensurePronModel();
         }
 
         loadXml(SOURCE).then(function (nodes) {
@@ -1215,6 +1972,9 @@
                 /* keep the live engine in step when the hook switches models */
                 asr.setEngineKind(value).catch(function () { });
             }
+            if (key === 'phonemeModel') {
+                switchPhonemeModel(value);
+            }
             return settings[key];
         },
         _asr: function () {
@@ -1228,6 +1988,100 @@
                 return Promise.reject(new Error('QuranASR missing'));
             }
             return engineInstance.setEngineKind('int8');
+        },
+        _ensureV8: function (kind) {
+            const engineInstance = ensureAsr();
+            if (!engineInstance) {
+                return Promise.reject(new Error('QuranASR missing'));
+            }
+            return engineInstance.setEngineKind(kind === 'v8fp32' ? 'v8fp32' : 'v8');
+        },
+        _transcribe: function (samples) {
+            /* test hook: run a 16 kHz utterance through the live engine
+               (includes the GOP reference the app would send) */
+            const engineInstance = ensureAsr();
+            if (!engineInstance) {
+                return Promise.reject(new Error('QuranASR missing'));
+            }
+            return engineInstance.transcribeSamples(samples);
+        },
+        _decodeAudio: function (arrayBuffer) {
+            const engineInstance = ensureAsr();
+            if (!engineInstance) {
+                return Promise.reject(new Error('QuranASR missing'));
+            }
+            return engineInstance.decodeTo16k(arrayBuffer);
+        },
+        _reference: function () {
+            /* test hook: what the next utterance would be graded against */
+            return buildReference();
+        },
+        _resetEngine: function () {
+            /* test hook: drop the live recognizer (workers reload on the
+               next ensure, picking up fresh worker scripts) */
+            if (asr) {
+                try { asr.dispose(); } catch (error) { /* ignore */ }
+                asr = null;
+                modelReady = false;
+            }
+            return true;
+        },
+        _inject: function (text, meta) {
+            /* test hook: commit a transcript with worker-style word data */
+            commitTranscript(text, meta || null);
+            return true;
+        },
+        _phon: function (units) {
+            /* feeds heard phoneme units straight into the checker (tests) */
+            handlePhonemes({ units: units });
+            return true;
+        },
+        _phonState: function () {
+            return {
+                enabled: settings.engine === 'phoneme',
+                ready: pronLoaded,
+                busy: pronBusy,
+                model: pronModelActive,
+                requested: phonemeModelId()
+            };
+        },
+        _phonLoad: function () {
+            const promise = ensurePronModel();
+            return promise || Promise.reject(new Error('checker disabled'));
+        },
+        _phonLog: function () {
+            try {
+                return JSON.parse(localStorage.getItem('quran-phoneme-log') || '[]');
+            } catch (error) {
+                return [];
+            }
+        },
+        _phonAudio: function (samples) {
+            /* routes raw 16k samples through the continuous stream (tests) */
+            if (settings.engine !== 'phoneme') {
+                return false;
+            }
+            for (let at = 0; at < samples.length; at += 4096) {
+                maybeStreamFrame(samples.slice(at, at + 4096));
+            }
+            return true;
+        },
+        _phonStreamState: function () {
+            return {
+                started: phonStreamStarted,
+                pendingUnits: phonStreamUnits.length,
+                aligning: phonStreamAligning
+            };
+        },
+        _phonEnd: function () {
+            /* flushes and closes the stream (tests) */
+            stopPhonemeStream();
+            return true;
+        },
+        _phonFlush: function () {
+            /* decodes the pending tail without closing the stream (tests) */
+            flushPhonemeStream();
+            return true;
         }
     };
 

@@ -1,0 +1,6 @@
+# ASR model weights are fetched from the Hugging Face mirrors, not committed:
+#   node QuranHifz/tools/fetch-asr-models.mjs
+# plus the phoneme engine's model from voidwaveDev/phoneme-v3 (see
+# QuranHifz/phoneme-asr-worker.js, which falls back to that repo). They are
+# hundreds of MB and GitHub rejects files over 100 MB per file.
+QuranHifz/tools/asr-models/

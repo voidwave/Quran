@@ -69,9 +69,11 @@
         let decoding = false;
         let nextId = 1;
 
-        let engineKind = 'whisper';    // 'whisper' | 'int8' (each with its own worker)
+        let engineKind = 'whisper';    // 'whisper' | 'int8' | 'v8' (int8 family shares a worker)
         let int8Worker = null;         // ort-nemo-asr-worker.js instance
+        let int8ModelId = null;        // which export the worker currently hosts
         let int8Ready = null;          // in-flight int8 model load
+        let referenceProvider = null;  // () => ({text}) — expected words for GOP
 
         function ensureWorker() {
             if (worker) {
@@ -140,7 +142,12 @@
                 if (entry) {
                     pending.delete(message.id);
                     clearTimeout(entry.timer);
-                    entry.resolve({ text: message.text || '', ms: message.ms | 0 });
+                    entry.resolve({
+                        text: message.text || '',
+                        words: message.words || null,
+                        gopWords: message.gopWords || null,
+                        ms: message.ms | 0
+                    });
                 }
                 decoding = false;
                 pumpQueue();
@@ -177,15 +184,36 @@
             return int8Worker;
         }
 
-        /** Loads the int8 engine once (inside its worker); resolves { device, dtype }. */
-        function ensureInt8() {
+        /** True when the active engine is one of the FastConformer ORT models. */
+        function int8Family() {
+            return engineKind === 'int8' || engineKind === 'v8' || engineKind === 'v8fp32';
+        }
+
+        /** ORT model id for an engine kind. */
+        function modelFor(kind) {
+            if (kind === 'v8') {
+                return 'quran-v8-ctc';
+            }
+            if (kind === 'v8fp32') {
+                return 'quran-v8-fp32';
+            }
+            return 'quran-int8-ort';
+        }
+
+        /** Loads the FastConformer engine once (inside its worker); resolves { device, dtype }. */
+        function ensureInt8(modelId) {
+            const id = modelId || modelFor(engineKind);
+            if (int8Ready && int8ModelId !== id) {
+                resetInt8('model switched');   // the worker hosts the other export
+            }
             if (int8Ready) {
                 return int8Ready;
             }
+            int8ModelId = id;
             const target = ensureInt8Worker();
             int8Ready = new Promise(function (resolve, reject) {
                 pending.set('load', { resolve: resolve, reject: reject });
-                target.postMessage({ type: 'load' });
+                target.postMessage({ type: 'load', model: id });
             });
             int8Ready.catch(function () {
                 int8Ready = null;   // allow a retry after a failure
@@ -211,12 +239,13 @@
                 entry.setPromise(Promise.reject(new Error(reason || 'engine restarted')));
             });
             int8Ready = null;
+            int8ModelId = null;
             modelInfo = null;
         }
 
         /** Restarts whichever backend is active (timeout recovery). */
         function resetEngine(reason) {
-            if (engineKind === 'int8') {
+            if (int8Family()) {
                 resetInt8(reason);
             } else {
                 resetWorker(reason);
@@ -230,20 +259,24 @@
          * download anything before the first mic press).
          */
         function setEngineKind(kind, loadNow) {
-            const next = kind === 'int8' ? 'int8' : 'whisper';
+            const next = kind === 'int8' ? 'int8'
+                : (kind === 'v8' ? 'v8' : (kind === 'v8fp32' ? 'v8fp32' : 'whisper'));
             if (next !== engineKind) {
-                if (next === 'int8') {
+                if (next === 'whisper') {
+                    resetInt8('engine switched');
+                } else {
                     /* the whisper worker may hold ~150 MB; drop it while unused */
                     resetWorker('engine switched');
-                } else {
-                    resetInt8('engine switched');
+                    if (engineKind !== 'whisper') {
+                        resetInt8('engine switched');   // int8 <-> v8: reload in the worker
+                    }
                 }
                 engineKind = next;
             }
             if (loadNow === false) {
                 return Promise.resolve(engineKind);
             }
-            return engineKind === 'int8' ? ensureInt8() : ensureModel(preferred);
+            return int8Family() ? ensureInt8(modelFor(engineKind)) : ensureModel(preferred);
         }
 
         /** Loads the model once; resolves with { device, dtype }. */
@@ -282,9 +315,10 @@
          * model files are cached, so this costs a few seconds.
          */
         function setDevice(prefer) {
-            if (engineKind === 'int8') {
-                /* int8 only runs on wasm kernels — remember the choice for a
-                   later switch back to whisper and leave sessions alone */
+            if (int8Family()) {
+                /* the q8 exports only run on wasm kernels — remember the
+                   choice for a later switch back to whisper and leave
+                   sessions alone */
                 preferred = prefer || preferred;
                 return Promise.resolve(modelInfo || { device: 'wasm', dtype: 'int8' });
             }
@@ -311,17 +345,26 @@
             }
             decoding = true;
             emit('status', 'transcribing');
-            const int8 = engineKind === 'int8';
+            const int8 = int8Family();
             let target;
             if (int8) {
                 target = ensureInt8Worker();
-                ensureInt8();   // kicks the model load; the worker queues behind it
+                ensureInt8(modelFor(engineKind));   // kicks the model load; the worker queues behind it
             } else {
                 ensureWorker();
                 target = worker;
             }
             const id = nextId;
             nextId += 1;
+            let reference = null;
+            if (int8 && referenceProvider) {
+                try {
+                    const ref = referenceProvider();
+                    reference = ref && ref.text ? String(ref.text) : null;
+                } catch (error) {
+                    reference = null;
+                }
+            }
             const promise = new Promise(function (resolve, reject) {
                 /* A wedged generation can occupy the wasm thread forever and
                    the worker would never answer again: give up and restart. */
@@ -336,7 +379,11 @@
                 pending.set(id, { resolve: resolve, reject: reject, timer: timer });
             });
             entry.setPromise(promise);
-            target.postMessage({ type: 'transcribe', id: id, audio: entry.samples });
+            target.postMessage({
+                type: 'transcribe', id: id, audio: entry.samples,
+                model: int8 ? modelFor(engineKind) : undefined,
+                reference: reference || undefined
+            });
         }
 
         function enqueue(samples) {
@@ -359,6 +406,8 @@
         let processorNode = null;
         let listening = false;
         let starting = null;
+        let captureOnly = false;   // phoneme-only mode: mic + VAD, no text model
+        let micClean = false;      // raw mic (no NS/AGC) — the phoneme model wants it
 
         let collecting = false;
         let frames = [];
@@ -373,38 +422,42 @@
             if (starting) {
                 return starting;
             }
-            starting = (engineKind === 'int8' ? ensureInt8() : ensureModel()).then(function () {
-                emit('status', 'requesting-mic');
-                return navigator.mediaDevices.getUserMedia({
-                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-                });
-            }).then(function (stream) {
-                mediaStream = stream;
-                const Ctx = window.AudioContext || window.webkitAudioContext;
-                let ctx;
-                try {
-                    ctx = new Ctx({ sampleRate: SAMPLE_RATE });
-                } catch (error) {
-                    ctx = new Ctx();
-                }
-                audioCtx = ctx;
-                return ctx.resume().catch(function () { }).then(function () {
-                    sourceNode = ctx.createMediaStreamSource(stream);
-                    processorNode = ctx.createScriptProcessor
-                        ? ctx.createScriptProcessor(FRAME_SAMPLES, 1, 1)
-                        : null;
-                    if (!processorNode) {
-                        throw new Error('ScriptProcessor is not available');
+            starting = (captureOnly
+                ? Promise.resolve()
+                : (int8Family() ? ensureInt8(modelFor(engineKind)) : ensureModel())).then(function () {
+                    emit('status', 'requesting-mic');
+                    return navigator.mediaDevices.getUserMedia({
+                        audio: micClean
+                            ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+                            : { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                    });
+                }).then(function (stream) {
+                    mediaStream = stream;
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    let ctx;
+                    try {
+                        ctx = new Ctx({ sampleRate: SAMPLE_RATE });
+                    } catch (error) {
+                        ctx = new Ctx();
                     }
-                    processorNode.onaudioprocess = onAudio;
-                    sourceNode.connect(processorNode);
-                    processorNode.connect(ctx.destination);
-                    listening = true;
-                    emit('status', 'listening');
+                    audioCtx = ctx;
+                    return ctx.resume().catch(function () { }).then(function () {
+                        sourceNode = ctx.createMediaStreamSource(stream);
+                        processorNode = ctx.createScriptProcessor
+                            ? ctx.createScriptProcessor(FRAME_SAMPLES, 1, 1)
+                            : null;
+                        if (!processorNode) {
+                            throw new Error('ScriptProcessor is not available');
+                        }
+                        processorNode.onaudioprocess = onAudio;
+                        sourceNode.connect(processorNode);
+                        processorNode.connect(ctx.destination);
+                        listening = true;
+                        emit('status', 'listening');
+                    });
+                }).finally(function () {
+                    starting = null;
                 });
-            }).finally(function () {
-                starting = null;
-            });
             return starting;
         }
 
@@ -442,6 +495,13 @@
             }
             const rms = Math.sqrt(sum / frame.length);
             emit('level', Math.min(1, rms * 8));
+
+            if (captureOnly) {
+                /* the phoneme engine consumes the raw stream, not utterances */
+                emit('frame', audioCtx && audioCtx.sampleRate !== SAMPLE_RATE
+                    ? resampleTo16k(frame, audioCtx.sampleRate)
+                    : frame);
+            }
 
             const frameMs = (frame.length / (audioCtx ? audioCtx.sampleRate : SAMPLE_RATE)) * 1000;
             const voiced = rms >= VAD_RMS;
@@ -485,6 +545,13 @@
             const rate = audioCtx ? audioCtx.sampleRate : SAMPLE_RATE;
             if (rate !== SAMPLE_RATE) {
                 samples = resampleTo16k(samples, rate);
+            }
+            /* the same 16 kHz utterance feeds any extra listeners (e.g. the
+               phoneme pronunciation checker) before being queued */
+            emit('utterance', samples);
+            if (captureOnly) {
+                /* phoneme-only mode: no text recognizer runs at all */
+                return;
             }
             enqueue(samples).then(function (result) {
                 emit('transcript', result.text, result);
@@ -549,6 +616,9 @@
             stop: stop,
             setDevice: setDevice,
             setEngineKind: setEngineKind,
+            setReferenceProvider: function (fn) { referenceProvider = fn || null; },
+            setCaptureOnly: function (value) { captureOnly = Boolean(value); },
+            setMicClean: function (value) { micClean = Boolean(value); },
             engineKind: function () { return engineKind; },
             isListening: function () { return listening; },
             isBusy: function () { return decoding || queue.length > 0; },

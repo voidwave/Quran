@@ -58,7 +58,23 @@ check("normalizeToken('ٱلرَّحْمَـٰنِ')", core.normalizeToken('ٱل�
 check("normalizeToken('مُوسَىٰ')", core.normalizeToken('مُوسَىٰ') === 'موسيا', core.normalizeToken('مُوسَىٰ'));
 check("standalone waqf mark → ''", core.normalizeToken('ۛ') === '' && core.normalizeToken('ۖ') === '');
 check('sajda mark and small letters stripped', core.normalizeToken('لَّهُۥ') === 'له', core.normalizeToken('لَّهُۥ'));
+check('Uthmani madda («ءَاثَـٰرِهِمْ») folds to the modern spelling (اثارهم)',
+    core.normalizeToken('ءَاثَـٰرِهِمْ') === 'اثارهم' && core.normalizeToken('آثَارِهِمْ') === 'اثارهم',
+    core.normalizeToken('ءَاثَـٰرِهِمْ') + ' / ' + core.normalizeToken('آثَارِهِمْ'));
+check('hamza-before-alef words settle exactly (آثَارِهِمْ heard for ءَاثَـٰرِهِمْ)',
+    core.wordScore(core.normalizeToken('آثَارِهِمْ'), core.normalizeToken('ءَاثَـٰرِهِمْ')) === 1,
+    String(core.wordScore(core.normalizeToken('آثَارِهِمْ'), core.normalizeToken('ءَاثَـٰرِهِمْ'))));
+check('the hamza fold applies inside words too (قُرْءَانٍ → قران)',
+    core.normalizeToken('قُرْءَانٍ') === 'قران' && core.normalizeToken('قُرْآنٍ') === 'قران'
+    && core.wordScore(core.normalizeToken('قُرْآنٍ'), core.normalizeToken('قُرْءَانٍ')) === 1,
+    core.normalizeToken('قُرْءَانٍ') + ' / ' + core.normalizeToken('قُرْآنٍ'));
 check("tokenize splits and drops marks", JSON.stringify(core.tokenize('لَا رَيْبَ ۛ فِيهِ')) === JSON.stringify(['لا', 'ريب', 'فيه']));
+check('«يا أيها» is joined to the Uthmani word «ياايها»',
+    JSON.stringify(core.flattenTokens(['يا ايها'])) === JSON.stringify(['ياايها']),
+    JSON.stringify(core.flattenTokens(['يا ايها'])));
+check('a lone «يا» is left alone (يا ليتني)',
+    JSON.stringify(core.flattenTokens(['يا ليتني'])) === JSON.stringify(['يا', 'ليتني']),
+    JSON.stringify(core.flattenTokens(['يا ليتني'])));
 
 section('word scoring');
 check("exact = 1", core.wordScore('الله', 'الله') === 1);
@@ -76,18 +92,17 @@ check('dagger alefs become alef (ٱلسَّمَـٰوَٰتِ → السماوا
 check('two alefs dropped is strong too (السموت \u2190 السماوات reversed)',
     core.wordScore('السموت', 'السماوات') >= core.STRONG_SIM,
     String(core.wordScore('السموت', 'السماوات')));
-check('three-letter pairs stay protected (قال/قل unchanged)',
-    core.wordScore('قال', 'قل') < core.STRONG_SIM, String(core.wordScore('قال', 'قل')));
-check('قال/قل stays weak (real words)', core.wordScore('قال', 'قل') < core.STRONG_SIM);
+check('قال/قل is a different word (perfect matching → 0)',
+    core.wordScore('قال', 'قل') === 0, String(core.wordScore('قال', 'قل')));
+check('«مالكم» is not «مالك» (extra letter → 0)',
+    core.wordScore('مالكم', 'مالك') === 0, String(core.wordScore('مالكم', 'مالك')));
 check('المؤمنون vs المجرمون = 0 (real substitution)', core.wordScore('المءمنون', 'المجرمون') === 0);
-check('منهم/منكم = 0.75 (weak band)', (function () {
-    const score = core.wordScore('منهم', 'منكم');
-    return score > 0 && score < core.STRONG_SIM;
-})(), String(core.wordScore('منهم', 'منكم')));
-check('قال/قل is weak, not strong', (function () {
-    const score = core.wordScore('قال', 'قل');
-    return score > 0 && score < core.STRONG_SIM;
-})(), String(core.wordScore('قال', 'قل')));
+check('a replaced letter is not the same word (منهم/منكم → 0)',
+    core.wordScore('منهم', 'منكم') === 0, String(core.wordScore('منهم', 'منكم')));
+check('«أنقمت» is not «أنعمت» (substitution → 0)',
+    core.wordScore('انقمت', 'انعمت') === 0, String(core.wordScore('انقمت', 'انعمت')));
+check('a dropped letter is a different word too (عليه/عليهم → 0)',
+    core.wordScore('عليه', 'عليهم') === 0, String(core.wordScore('عليه', 'عليهم')));
 check('two-letter words require exactness', core.wordScore('ما', 'من') === 0);
 check('levenshtein sanity', core.levenshtein('كتاب', 'كتب') === 1);
 
@@ -239,18 +254,56 @@ section('repeated word');
     check('all verse-1 words ok', tracker.states.slice(0, 4).join(',') === 'ok,ok,ok,ok', statesOf(tracker));
 }
 
-section('basmala handling');
+section('opening basmala: dropped only when the passage lacks it');
 {
+    // Surah 112 does not contain the basmala; saying it out of habit must
+    // leave no trace — no error marks, no hold/lowconf nags.
     const result = runTracker(core.buildItems(SKIP_VERSE), ['بسم الله الرحمن الرحيم قل هو الله احد']);
-    check('basmala stripped, verse-1 words committed',
+    check('verse-1 words commit',
         result.tracker.states.slice(0, 4).join(',') === 'ok,ok,ok,ok',
         result.tracker.states.slice(0, 4).join(','));
     check('cursor after verse 1', result.tracker.cursor === 4, String(result.tracker.cursor));
-    check('no spurious extras', result.tracker.stats.extras === 0);
+    check('no extras', result.tracker.stats.extras === 0, String(result.tracker.stats.extras));
+    check('no misses and no hold nag', result.tracker.stats.misses === 0
+        && opsOf(result.ops, 'hold').length === 0,
+        JSON.stringify([result.tracker.stats.misses, opsOf(result.ops, 'hold').length]));
 
+    // the isti'adha is dropped the same way
+    const adha = runTracker(core.buildItems(SKIP_VERSE),
+        ['اعوذ بالله من الشيطان الرجيم قل هو الله احد']);
+    check("isti'adha dropped too, verse commits",
+        adha.tracker.states.slice(0, 4).join(',') === 'ok,ok,ok,ok', statesOf(adha.tracker));
+    check("no extras for the isti'adha", adha.tracker.stats.extras === 0,
+        String(adha.tracker.stats.extras));
+
+    // a passage that IS the basmala keeps it: the words are real text
     const withBasmala = core.buildItems([{ s: 1, a: 1, text: 'بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ' }]);
     const result2 = runTracker(withBasmala, ['بسم الله الرحمن الرحيم']);
-    check('basmala kept when it IS the passage', statesOf(result2.tracker) === 'ok,ok,ok,ok', statesOf(result2.tracker));
+    check('basmala matches when it IS the passage', statesOf(result2.tracker) === 'ok,ok,ok,ok',
+        statesOf(result2.tracker));
+    check('no extras then', result2.tracker.stats.extras === 0, String(result2.tracker.stats.extras));
+}
+
+section('basmala inside the text is real (An-Naml 27:30)');
+{
+    // «وَإِنَّهُۥ بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ» is part of this verse. The
+    // old phrase stripper deleted it from the heard stream, left the words
+    // unsettleable and stalled the tracker on «بسم» — this is the regression.
+    const NAML = [{ s: 27, a: 30, text: 'إِنَّهُۥ مِن سُلَيْمَـٰنَ وَإِنَّهُۥ بِسْمِ ٱللَّهِ ٱلرَّحْمَـٰنِ ٱلرَّحِيمِ' }];
+    const result = runTracker(core.buildItems(NAML), ['انه من سليمان وانه بسم الله الرحمن الرحيم']);
+    check('every word settles, including the basmala',
+        statesOf(result.tracker) === 'ok,ok,ok,ok,ok,ok,ok,ok', statesOf(result.tracker));
+    check('no misses', opsOf(result.ops, 'miss').length === 0, JSON.stringify(opsOf(result.ops, 'miss')));
+    check('complete', result.tracker.done === true);
+}
+
+section('recognizer splits «يا أيها» — joined back (4:1)');
+{
+    const items = core.buildItems([{ s: 4, a: 1, text: 'يَـٰٓأَيُّهَا ٱلنَّاسُ ٱتَّقُوا۟ رَبَّكُمُ' }]);
+    const result = runTracker(items, ['يا ايها الناس اتقوا ربكم']);
+    check('every word settles, including «ياايها»', statesOf(result.tracker) === 'ok,ok,ok,ok',
+        statesOf(result.tracker));
+    check('complete', result.tracker.done === true);
 }
 
 section('forward jump is refused (stay put)');
@@ -452,6 +505,41 @@ section('ending confusion settles the word with a note (Al-Asr 103:3)');
     const ops = tracker.finalize('طالحة');
     check('gibberish «طالحة» never settles', tracker.states[0] === 'pending', statesOf(tracker));
     check('and raises no ending note', opsOf(ops, 'ending').length === 0, JSON.stringify(ops));
+}
+
+section('a different word is a mistake, never a match (أنقمت، مالكم)');
+{
+    const items = core.buildItems([{ s: 1, a: 7, text: 'صِرَٰطَ ٱلَّذِينَ أَنْعَمْتَ عَلَيْهِمْ' }]);
+    const tracker = core.createTracker(items);
+    const ops = tracker.finalize('صراط الذين انقمت');
+    check('the two good words settle', tracker.states.slice(0, 2).join(',') === 'ok,ok', statesOf(tracker));
+    check('«أنعمت» is not revealed by «انقمت»', tracker.states[2] === 'pending'
+        && !opsOf(ops, 'ok').some(function (op) { return op.i === 2; }), JSON.stringify(ops));
+    check('cursor waits at «أنعمت»', tracker.cursor === 2, String(tracker.cursor));
+
+    const tracker2 = core.createTracker(items);
+    const ops2 = tracker2.finalize('صراط الذين انقمت عليهم');
+    const subs = opsOf(ops2, 'sub');
+    check('a substitution lands on «أنعمت» with the heard word',
+        subs.length === 1 && subs[0].i === 2 && subs[0].heard === 'انقمت', JSON.stringify(subs));
+    check('and the word is not revealed', tracker2.states[2] === 'pending', statesOf(tracker2));
+
+    const again = tracker.finalize('انعمت عليهم');
+    check('saying it correctly settles it', tracker.states.slice(2, 4).join(',') === 'ok,ok', statesOf(tracker));
+}
+{
+    const items = core.buildItems([{ s: 1, a: 4, text: 'مَـٰلِكِ يَوْمِ ٱلدِّينِ' }]);
+    const tracker = core.createTracker(items);
+    const ops = tracker.finalize('مالكم يوم الدين');
+    const subs = opsOf(ops, 'sub');
+    check('«مالكم» is a substitution at «مالك»', subs.length === 1 && subs[0].i === 0
+        && subs[0].heard === 'مالكم', JSON.stringify(subs));
+    check('«مالك» stays unrevealed', tracker.states[0] === 'pending', statesOf(tracker));
+
+    // the approved alef convention keeps working: «ملك» still settles «مالك»
+    const tracker2 = core.createTracker(items);
+    tracker2.finalize('ملك يوم الدين');
+    check('«ملك» still settles «مالك» (alef convention)', tracker2.states[0] === 'ok', statesOf(tracker2));
 }
 
 /* -------------------------------------------------------------------------- */

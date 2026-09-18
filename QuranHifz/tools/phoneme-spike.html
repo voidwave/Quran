@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>phoneme spike — quran zipformer</title>
+    <style>
+        :root {
+            --bg: #101418;
+            --panel: #1a2129;
+            --line: #2a3540;
+            --text: #e8eef4;
+            --dim: #8fa3b3;
+            --accent: #4ea1ff;
+            --ok: #66d07f;
+            --warn: #ffb454;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 16px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+        }
+
+        h1 {
+            font-size: 1.05rem;
+            margin: 0 0 12px;
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .card h2 {
+            font-size: 0.9rem;
+            margin: 0 0 10px;
+            color: var(--accent);
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        label {
+            color: var(--dim);
+            font-size: 0.82rem;
+        }
+
+        select,
+        input,
+        button {
+            font: inherit;
+            padding: 6px 10px;
+            border-radius: 7px;
+            border: 1px solid var(--line);
+            background: #12181e;
+            color: var(--text);
+        }
+
+        button {
+            cursor: pointer;
+            border-color: #3a4a5a;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
+
+        button.primary {
+            background: #16436e;
+            border-color: #2f6ea8;
+        }
+
+        #status {
+            font-size: 0.85rem;
+            color: var(--warn);
+            min-height: 1.2em;
+        }
+
+        #out {
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 1.5rem;
+            line-height: 2.1;
+            min-height: 3em;
+            margin: 0;
+        }
+
+        .meta {
+            color: var(--dim);
+            font-size: 0.8rem;
+            margin-top: 8px;
+        }
+
+        details {
+            margin-top: 8px;
+            color: var(--dim);
+            font-size: 0.8rem;
+        }
+
+        .expected {
+            color: var(--dim);
+            font-size: 1.15rem;
+            line-height: 1.9;
+        }
+
+        /* المقارنة بالمرجع */
+        .cmp-summary {
+            font-size: 0.92rem;
+            color: var(--text);
+            margin-bottom: 8px;
+        }
+
+        .cmp-word {
+            margin: 0 0 8px;
+            padding: 5px 8px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+        }
+
+        .cmp-word__label {
+            color: var(--dim);
+            font-size: 0.76rem;
+            margin-bottom: 3px;
+        }
+
+        .cmp-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 3px 5px;
+            align-items: baseline;
+        }
+
+        .u {
+            padding: 0 5px;
+            border-radius: 6px;
+            font-size: 1.14rem;
+            background: #18212a;
+            border: 1px solid transparent;
+            white-space: nowrap;
+        }
+
+        .u--ok {
+            color: #7fd18f;
+        }
+
+        .u--near {
+            color: var(--warn);
+            border-color: #7a5a1d;
+        }
+
+        .u--bad {
+            color: #ff9d9d;
+            border-color: #7a2a2a;
+        }
+
+        .u--miss {
+            color: #ff8080;
+            border-color: #7a2a2a;
+            background: #2a1414;
+        }
+
+        .u--extra {
+            color: #ffd479;
+            border-color: #7a6a1d;
+        }
+
+        .cmp-note {
+            color: var(--dim);
+            font-size: 0.72rem;
+            margin-inline-end: 4px;
+        }
+
+        footer {
+            color: var(--dim);
+            font-size: 0.72rem;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>اختبار نموذج الفونيمات — zikrhub-recitation-zipformer (int8, ort-web wasm)</h1>
+
+    <div class="card">
+        <h2>اختبار ملف قارئ</h2>
+        <div class="row">
+            <label>القارئ</label>
+            <select id="reciter"></select>
+            <label>السورة</label>
+            <select id="surah"></select>
+            <label>الآية (0 = البسملة)</label>
+            <input id="ayah" type="number" min="0" value="4" style="width:5.5rem">
+            <button id="file-test" class="primary">اختبر الملف</button>
+        </div>
+        <div class="expected" id="expected"></div>
+    </div>
+
+    <div class="card">
+        <h2>اختبار الميكروفون</h2>
+        <div class="row">
+            <button id="mic-start" class="primary">ابدأ التسجيل</button>
+            <button id="mic-stop" disabled>أوقف وحلّل</button>
+            <span id="mic-state" class="meta"></span>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>الناتج (وحدات الفونيمات)</h2>
+        <div id="status">…جارٍ تحميل النموذج</div>
+        <pre id="out"></pre>
+        <div class="meta" id="meta"></div>
+        <details>
+            <summary>معرّفات الوحدات</summary>
+            <div id="ids"></div>
+        </details>
+    </div>
+
+    <div class="card" id="compare-card" hidden>
+        <h2>مقارنة الناتج بالنص المرجعي الكنَوي</h2>
+        <div class="cmp-summary" id="cmp-summary"></div>
+        <div class="meta">أخضر = مطابق، أصفر = قريب (حركة/طول مد/شدة/قلقلة)، أحمر = خطأ أو ناقص، «+» = زيادة لم تُسمع في
+            المرجع. بين القوسين ما سُمع فعلاً.</div>
+        <div id="cmp-words"></div>
+    </div>
+
+    <footer>
+        النموذج: digisolutionsapps/zikrhub-recitation-zipformer — رخصة حرة غير تجارية (تطبيقات مجانية فقط،
+        بلا تحقيق دخل)؛ فالاستخدام هنا للاختبار فقط.
+    </footer>
+
+    <script>
+        'use strict';
+        (function () {
+            /* ================================================================
+             * الالتقاط: knf fbank (kaldi) + zipformer2 CTC
+             * ============================================================= */
+
+            const MODEL_BASE = 'asr-models/zipformer-quran-phonemes/';
+            const ORT_VERSION = '1.30.0';
+            const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@' + ORT_VERSION + '/dist/';
+            const AUDIO_BASE = '/QuranAudio/';
+
+            const SR = 16000, NFFT = 512, FRAME = 400, SHIFT = 160, BINS = 80;
+            const FLT_EPS = 1.1920929e-7;
+            const T = 61, STEP = 48, BLANK = 250;
+
+            /* ---------- fbank (مطابق لـ kaldi-native-fbank) ---------------- */
+
+            const melScale = f => 1127 * Math.log(1 + f / 700);
+            const numFftBins = NFFT / 2;
+            const fftBinWidth = SR / NFFT;
+            const melLow = melScale(20);
+            const melHigh = melScale(8000);   // kaldi default: nyquist
+            const melDelta = (melHigh - melLow) / (BINS + 1);
+            const MEL_FILTERS = [];
+            for (let b = 0; b < BINS; b += 1) {
+                const left = melLow + b * melDelta;
+                const center = melLow + (b + 1) * melDelta;
+                const right = melLow + (b + 2) * melDelta;
+                const w = new Float32Array(numFftBins);
+                for (let i = 0; i < numFftBins; i += 1) {
+                    const mel = melScale(fftBinWidth * i);
+                    if (mel > left && mel < right) {
+                        w[i] = mel <= center
+                            ? (mel - left) / (center - left)
+                            : (right - mel) / (right - center);
+                    }
+                }
+                MEL_FILTERS.push(w);
+            }
+            const POVEY = new Float32Array(FRAME);
+            for (let n = 0; n < FRAME; n += 1) {
+                POVEY[n] = Math.pow(0.5 - 0.5 * Math.cos(2 * Math.PI * n / (FRAME - 1)), 0.85);
+            }
+
+            function fft(re, im) {
+                const n = re.length;
+                for (let i = 1, j = 0; i < n; i += 1) {
+                    let bit = n >> 1;
+                    for (; j & bit; bit >>= 1) { j ^= bit; }
+                    j ^= bit;
+                    if (i < j) {
+                        let t = re[i]; re[i] = re[j]; re[j] = t;
+                        t = im[i]; im[i] = im[j]; im[j] = t;
+                    }
+                }
+                for (let len = 2; len <= n; len <<= 1) {
+                    const ang = -2 * Math.PI / len;
+                    const wr = Math.cos(ang);
+                    const wi = Math.sin(ang);
+                    for (let i = 0; i < n; i += len) {
+                        let cwr = 1, cwi = 0;
+                        for (let k = 0; k < len / 2; k += 1) {
+                            const ur = re[i + k], ui = im[i + k];
+                            const vr = re[i + k + len / 2] * cwr - im[i + k + len / 2] * cwi;
+                            const vi = re[i + k + len / 2] * cwi + im[i + k + len / 2] * cwr;
+                            re[i + k] = ur + vr;
+                            im[i + k] = ui + vi;
+                            re[i + k + len / 2] = ur - vr;
+                            im[i + k + len / 2] = ui - vi;
+                            const nwr = cwr * wr - cwi * wi;
+                            cwi = cwr * wi + cwi * wr;
+                            cwr = nwr;
+                        }
+                    }
+                }
+            }
+
+            function computeFbank(samples) {
+                const numFrames = Math.max(0, 1 + Math.floor((samples.length - FRAME) / SHIFT));
+                const feats = new Float32Array(numFrames * BINS);
+                const re = new Float32Array(NFFT);
+                const im = new Float32Array(NFFT);
+                for (let t = 0; t < numFrames; t += 1) {
+                    const start = t * SHIFT;
+                    let mean = 0;
+                    for (let n = 0; n < FRAME; n += 1) { mean += samples[start + n]; }
+                    mean /= FRAME;
+                    for (let n = 0; n < FRAME; n += 1) { re[n] = samples[start + n] - mean; }
+                    for (let n = FRAME - 1; n > 0; n -= 1) { re[n] -= 0.97 * re[n - 1]; }
+                    re[0] -= 0.97 * re[0];
+                    for (let n = 0; n < FRAME; n += 1) { re[n] *= POVEY[n]; }
+                    for (let n = FRAME; n < NFFT; n += 1) { re[n] = 0; }
+                    im.fill(0);
+                    fft(re, im);
+                    for (let b = 0; b < BINS; b += 1) {
+                        const f = MEL_FILTERS[b];
+                        let acc = 0;
+                        for (let i = 0; i < numFftBins; i += 1) {
+                            acc += (re[i] * re[i] + im[i] * im[i]) * f[i];
+                        }
+                        feats[t * BINS + b] = Math.log(Math.max(acc, FLT_EPS));
+                    }
+                }
+                return { feats: feats, numFrames: numFrames };
+            }
+
+            /* ---------- أشكال مخابئ المشفّر (16 طبقة) ---------------------- */
+
+            const CACHE_CFG = [
+                { key: [256, 1, 128], nonlin: [1, 1, 256, 144], val: [256, 1, 48], conv: [1, 192, 15] },
+                { key: [256, 1, 128], nonlin: [1, 1, 256, 144], val: [256, 1, 48], conv: [1, 192, 15] },
+                { key: [128, 1, 128], nonlin: [1, 1, 128, 192], val: [128, 1, 48], conv: [1, 256, 15] },
+                { key: [128, 1, 128], nonlin: [1, 1, 128, 192], val: [128, 1, 48], conv: [1, 256, 15] },
+                { key: [64, 1, 128], nonlin: [1, 1, 64, 288], val: [64, 1, 48], conv: [1, 384, 7] },
+                { key: [64, 1, 128], nonlin: [1, 1, 64, 288], val: [64, 1, 48], conv: [1, 384, 7] },
+                { key: [64, 1, 128], nonlin: [1, 1, 64, 288], val: [64, 1, 48], conv: [1, 384, 7] },
+                { key: [32, 1, 256], nonlin: [1, 1, 32, 384], val: [32, 1, 96], conv: [1, 512, 7] },
+                { key: [32, 1, 256], nonlin: [1, 1, 32, 384], val: [32, 1, 96], conv: [1, 512, 7] },
+                { key: [32, 1, 256], nonlin: [1, 1, 32, 384], val: [32, 1, 96], conv: [1, 512, 7] },
+                { key: [32, 1, 256], nonlin: [1, 1, 32, 384], val: [32, 1, 96], conv: [1, 512, 7] },
+                { key: [64, 1, 128], nonlin: [1, 1, 64, 288], val: [64, 1, 48], conv: [1, 384, 7] },
+                { key: [64, 1, 128], nonlin: [1, 1, 64, 288], val: [64, 1, 48], conv: [1, 384, 7] },
+                { key: [64, 1, 128], nonlin: [1, 1, 64, 288], val: [64, 1, 48], conv: [1, 384, 7] },
+                { key: [128, 1, 128], nonlin: [1, 1, 128, 192], val: [128, 1, 48], conv: [1, 256, 15] },
+                { key: [128, 1, 128], nonlin: [1, 1, 128, 192], val: [128, 1, 48], conv: [1, 256, 15] }
+            ];
+
+            let session = null;
+            let id2piece = {};
+            let ready = null;
+
+            function setStatus(text) {
+                document.getElementById('status').textContent = text;
+            }
+
+            function makeCaches() {
+                const caches = {};
+                session.inputNames.forEach(function (name) {
+                    if (name === 'x' || name === 'processed_lens') {
+                        return;
+                    }
+                    if (name === 'embed_states') {
+                        caches[name] = new ort.Tensor('float32',
+                            new Float32Array(1 * 128 * 3 * 19), [1, 128, 3, 19]);
+                        return;
+                    }
+                    const m = name.match(/^cached_(key|nonlin_attn|val1|val2|conv1|conv2)_(\d+)$/);
+                    const cfg = CACHE_CFG[Number(m[2])];
+                    const shape = m[1] === 'key' ? cfg.key
+                        : m[1] === 'nonlin_attn' ? cfg.nonlin
+                            : m[1].indexOf('val') === 0 ? cfg.val : cfg.conv;
+                    const size = shape.reduce(function (a, b) { return a * b; }, 1);
+                    caches[name] = new ort.Tensor('float32', new Float32Array(size), shape);
+                });
+                return caches;
+            }
+
+            function loadModel() {
+                if (ready) {
+                    return ready;
+                }
+                ready = new Promise(function (resolve, reject) {
+                    const script = document.createElement('script');
+                    script.src = ORT_CDN + 'ort.min.js';
+                    script.onload = resolve;
+                    script.onerror = function () { reject(new Error('تعذّر تحميل onnxruntime-web')); };
+                    document.head.appendChild(script);
+                }).then(function () {
+                    ort.env.wasm.wasmPaths = ORT_CDN;
+                    setStatus('…جارٍ تحميل النموذج (٧٢ ميغابايت)');
+                    return Promise.all([
+                        ort.InferenceSession.create(MODEL_BASE + 'quran_phoneme_zipformer.int8.onnx',
+                            { executionProviders: ['wasm'] }),
+                        fetch(MODEL_BASE + 'tokens.txt').then(function (r) { return r.text(); })
+                    ]);
+                }).then(function (res) {
+                    session = res[0];
+                    id2piece = {};
+                    res[1].split('\n').filter(Boolean).forEach(function (line) {
+                        const sp = line.lastIndexOf(' ');
+                        id2piece[Number(line.slice(sp + 1))] = line.slice(0, sp);
+                    });
+                    setStatus('النموذج جاهز — اختر ملفًا أو استخدم الميكروفون');
+                }).catch(function (error) {
+                    setStatus('خطأ: ' + error.message);
+                    throw error;
+                });
+                return ready;
+            }
+
+            /* ---------- التفريغ: نوافذ T=61 بخطوة 48 + CTC جشع ------------ */
+
+            function transcribe(samples) {
+                const fbank = computeFbank(samples);
+                const feats = fbank.feats;
+                const numFrames = fbank.numFrames;
+                if (numFrames < 1) {
+                    return Promise.resolve({ ms: 0, seconds: samples.length / SR, unitIds: [], units: [], text: '' });
+                }
+                let caches = makeCaches();
+                const x = new Float32Array(T * BINS);
+                const unitIds = [];
+                let prevId = -1;
+                const totalSteps = Math.ceil(numFrames / STEP) + 2; // ذيل إضافي لآخر الكلمات
+                const t0 = performance.now();
+                let chain = Promise.resolve();
+                for (let step = 0; step < totalSteps; step += 1) {
+                    (function (t) {
+                        chain = chain.then(function () {
+                            for (let i = 0; i < T; i += 1) {
+                                const f = Math.max(0, Math.min(t + i, numFrames - 1));
+                                for (let b = 0; b < BINS; b += 1) {
+                                    x[i * BINS + b] = feats[f * BINS + b];
+                                }
+                            }
+                            const feeds = Object.assign({}, caches);
+                            feeds.x = new ort.Tensor('float32', x.slice(), [1, T, BINS]);
+                            feeds.processed_lens = new ort.Tensor('int64',
+                                BigInt64Array.from([BigInt(Math.min(t + T, numFrames))]), [1]);
+                            return session.run(feeds).then(function (outputs) {
+                                const lp = outputs.log_probs;
+                                for (let r = 0; r < lp.dims[1]; r += 1) {
+                                    let best = 0;
+                                    let bestV = -Infinity;
+                                    const off = r * 251;
+                                    for (let k = 0; k < 251; k += 1) {
+                                        if (lp.data[off + k] > bestV) {
+                                            bestV = lp.data[off + k];
+                                            best = k;
+                                        }
+                                    }
+                                    if (best !== prevId) {
+                                        if (best !== BLANK) {
+                                            unitIds.push(best);
+                                        }
+                                        prevId = best;
+                                    }
+                                }
+                                session.outputNames.forEach(function (name) {
+                                    if (name.indexOf('new_') === 0) {
+                                        caches[name.slice(4)] = outputs[name];
+                                    }
+                                });
+                            });
+                        });
+                    })(step * STEP);
+                }
+                return chain.then(function () {
+                    return {
+                        ms: Math.round(performance.now() - t0),
+                        seconds: samples.length / SR,
+                        unitIds: unitIds,
+                        units: unitIds.map(function (id) { return id2piece[id] || ('#' + id); }),
+                        text: unitIds.map(function (id) { return id2piece[id] || ('#' + id); }).join(' ')
+                    };
+                });
+            }
+
+            /* ---------- الصوت: فك + إعادة أخذ عينات 16k -------------------- */
+
+            function to16k(samples, rate) {
+                if (rate === SR) {
+                    return Promise.resolve(samples);
+                }
+                const off = new OfflineAudioContext(1, Math.ceil(samples.length * SR / rate), SR);
+                const buf = off.createBuffer(1, samples.length, rate);
+                buf.copyToChannel(samples, 0);
+                const src = off.createBufferSource();
+                src.buffer = buf;
+                src.connect(off.destination);
+                src.start();
+                return off.startRendering().then(function (rendered) {
+                    return rendered.getChannelData(0).slice();
+                });
+            }
+
+            function decodeFile(arrayBuffer) {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                const ctx = new Ctx();
+                return ctx.decodeAudioData(arrayBuffer.slice(0)).then(function (decoded) {
+                    ctx.close().catch(function () { });
+                    return to16k(decoded.getChannelData(0).slice(), decoded.sampleRate);
+                });
+            }
+
+            /* ---------- الواجهة -------------------------------------------- */
+
+            const out = document.getElementById('out');
+            const meta = document.getElementById('meta');
+            const idsOut = document.getElementById('ids');
+            const expected = document.getElementById('expected');
+            let suras = null;
+
+            function show(result) {
+                out.textContent = result.text;
+                idsOut.textContent = result.unitIds.join(' ');
+                meta.textContent = 'المدة ' + result.seconds.toFixed(2) + ' ث — '
+                    + result.ms + ' م.ث (' + (result.seconds / (result.ms / 1000)).toFixed(1) + '× الوقت الحقيقي) — '
+                    + result.units.length + ' وحدة';
+                compareCurrent(result).catch(function () { });
+            }
+
+            /* ---------- المقارنة بالجدول المرجعي الكنَوي ------------------- */
+
+            const CANON_BASE = '../../QuranText/QuranPhonemes/';
+            const canonCache = {};
+            const HARAKA = 'َُِ';
+            const LETTER_ALIAS = { 'ں': 'ن', '۾': 'م', 'ۥ': 'و', 'ۦ': 'ي' };
+
+            function canonLoad(s) {
+                if (!canonCache[s]) {
+                    canonCache[s] = fetch(CANON_BASE + s + '.json')
+                        .then(function (r) { return r.ok ? r.json() : null; })
+                        .catch(function () { return null; });
+                }
+                return canonCache[s];
+            }
+
+            async function canonFor(s, a) {
+                const obj = await canonLoad(s);
+                if (!obj) {
+                    return null;
+                }
+                if (a === 0) {
+                    return obj.b ? { clusters: obj.b.split(' '), lens: null, bismillah: true } : null;
+                }
+                const entry = obj.a[a - 1];
+                if (!entry) {
+                    return null;
+                }
+                return { clusters: entry.c.split(' '), lens: entry.l, bismillah: false };
+            }
+
+            // تفكيك وحدة إلى حرف/حركة/عدد/قلقلة (۰۶۷ں۾ = أشكال مدينة للأسنان/الميم)
+            function unitInfo(piece) {
+                let t = piece;
+                let qlqla = false;
+                if (t.endsWith('ڇ')) { qlqla = true; t = t.slice(0, -1); }
+                let vowel = '';
+                if (t && HARAKA.includes(t.charAt(t.length - 1))) {
+                    vowel = t.charAt(t.length - 1);
+                    t = t.slice(0, -1);
+                }
+                let letter = '', uniform = true, count = 0;
+                for (let i = 0; i < t.length; i++) {
+                    const m = LETTER_ALIAS[t[i]] || t[i];
+                    if (count === 0) { letter = m; } else if (m !== letter) { uniform = false; }
+                    count += 1;
+                }
+                return { letter: letter, uniform: uniform, count: count, vowel: vowel, qlqla: qlqla };
+            }
+
+            // كلفة محاذاة وحدة مرجعية مع وحدة مسموعة
+            function unitCost(can, heard) {
+                const A = unitInfo(can), B = unitInfo(heard);
+                if (can === heard) { return 0; }
+                if (A.letter === B.letter && A.uniform && B.uniform && A.count === B.count &&
+                    A.vowel === B.vowel && A.qlqla === B.qlqla) {
+                    return 0; // نفس الحرف بصورة مختلفة (ن/ں…)
+                }
+                if (A.letter && A.letter === B.letter && A.uniform && B.uniform) {
+                    const v = A.vowel === B.vowel ? 0 : 3;
+                    const c = A.count === B.count ? 0 : 2;
+                    const q = A.qlqla === B.qlqla ? 0 : 2;
+                    if (A.count === 0 || B.count === 0) { return 6; } // مد ↔ غير مد
+                    return v + c + q || 2;
+                }
+                return 6;
+            }
+
+            // محاذاة DP (Needleman-Wunsch) — gap = 4
+            function alignUnits(can, heard) {
+                const n = can.length, m = heard.length, GAP = 4;
+                const rows = [];
+                for (let i = 0; i <= n; i++) { rows.push(new Int32Array(m + 1)); }
+                for (let j = 1; j <= m; j++) { rows[0][j] = rows[0][j - 1] + GAP; }
+                for (let i = 1; i <= n; i++) {
+                    rows[i][0] = rows[i - 1][0] + GAP;
+                    for (let j = 1; j <= m; j++) {
+                        const sub = rows[i - 1][j - 1] + unitCost(can[i - 1], heard[j - 1]);
+                        const del = rows[i - 1][j] + GAP;
+                        const ins = rows[i][j - 1] + GAP;
+                        rows[i][j] = Math.min(sub, del, ins);
+                    }
+                }
+                const ops = [];
+                let i = n, j = m;
+                while (i > 0 || j > 0) {
+                    if (i > 0 && j > 0) {
+                        const c = unitCost(can[i - 1], heard[j - 1]);
+                        if (rows[i][j] === rows[i - 1][j - 1] + c) {
+                            ops.push({ type: c === 0 ? 'match' : (c <= 3 ? 'near' : 'bad'), c: i - 1, h: j - 1 });
+                            i -= 1; j -= 1; continue;
+                        }
+                    }
+                    if (i > 0 && rows[i][j] === rows[i - 1][j] + GAP) { ops.push({ type: 'miss', c: i - 1 }); i -= 1; continue; }
+                    if (j > 0 && rows[i][j] === rows[i][j - 1] + GAP) { ops.push({ type: 'extra', h: j - 1 }); j -= 1; continue; }
+                    if (i > 0) { ops.push({ type: 'miss', c: i - 1 }); i -= 1; } else { ops.push({ type: 'extra', h: j - 1 }); j -= 1; }
+                }
+                ops.reverse();
+                return ops;
+            }
+
+            function deviationNote(can, heard) {
+                const A = unitInfo(can), B = unitInfo(heard);
+                if (A.letter !== B.letter) { return 'حرف مختلف'; }
+                const parts = [];
+                if (A.count !== B.count) { parts.push('الطول ' + A.count + '↔' + B.count); }
+                if (A.vowel !== B.vowel) { parts.push('الحركة'); }
+                if (A.qlqla !== B.qlqla) { parts.push('القلقلة'); }
+                return parts.join(' — ') || 'مختلف';
+            }
+
+            function renderCompare(canon, heardUnits, s, a) {
+                const clusters = canon.clusters;
+                const lens = canon.lens;
+                const wordOf = [];
+                if (lens) {
+                    lens.forEach(function (len, wi) { for (let k = 0; k < len; k++) { wordOf.push(wi); } });
+                }
+                const ops = alignUnits(clusters, heardUnits);
+                const numWords = lens ? lens.length : 1;
+                const perWord = [];
+                for (let w = 0; w < numWords; w++) { perWord.push([]); }
+                let lastWord = -1;
+                ops.forEach(function (op) {
+                    let w = op.c !== undefined ? wordOf[op.c] : lastWord;
+                    if (w === undefined || w === null || w < 0) { w = lastWord >= 0 ? lastWord : 0; }
+                    lastWord = w;
+                    perWord[w].push(op);
+                });
+
+                let wordTexts = null;
+                try {
+                    const sura = suras && suras[s - 1];
+                    if (sura && a >= 1) {
+                        const aya = sura.children[a - 1];
+                        wordTexts = aya.getAttribute('text').split(' ');
+                    }
+                } catch (error) { /* عناوين اختيارية */ }
+
+                const counts = { match: 0, near: 0, bad: 0, miss: 0, extra: 0 };
+                ops.forEach(function (op) { counts[op.type] += 1; });
+                const pct = clusters.length ? (100 * counts.match / clusters.length).toFixed(1) : '0';
+                document.getElementById('cmp-summary').textContent =
+                    (canon.bismillah ? 'البسملة — ' : '')
+                    + 'وحدات المرجع: ' + clusters.length
+                    + ' — مطابق: ' + counts.match + ' (' + pct + '%)'
+                    + ' — قريب: ' + counts.near
+                    + ' — خطأ: ' + counts.bad
+                    + ' — ناقص: ' + counts.miss
+                    + ' — زائد: ' + counts.extra;
+
+                const container = document.getElementById('cmp-words');
+                container.textContent = '';
+                perWord.forEach(function (list, wi) {
+                    const deviated = list.some(function (op) { return op.type !== 'match'; });
+                    const box = document.createElement('div');
+                    box.className = 'cmp-word';
+                    const label = document.createElement('div');
+                    label.className = 'cmp-word__label';
+                    label.textContent = 'كلمة ' + (wi + 1)
+                        + (wordTexts && wordTexts[wi] ? ': ' + wordTexts[wi] : '')
+                        + (deviated ? '' : ' ✓');
+                    box.appendChild(label);
+                    const chips = document.createElement('div');
+                    chips.className = 'cmp-chips';
+                    list.forEach(function (op) {
+                        if (op.type === 'extra') {
+                            const extra = document.createElement('span');
+                            extra.className = 'u u--extra';
+                            extra.textContent = '+' + heardUnits[op.h];
+                            extra.title = 'لم يُسمع في المرجع';
+                            chips.appendChild(extra);
+                            return;
+                        }
+                        const chip = document.createElement('span');
+                        chip.className = 'u ' + (op.type === 'match' ? 'u--ok' :
+                            op.type === 'near' ? 'u--near' : op.type === 'bad' ? 'u--bad' : 'u--miss');
+                        chip.textContent = clusters[op.c];
+                        if (op.type === 'miss') {
+                            chip.title = 'لم يُسمع';
+                        } else if (op.h !== undefined && heardUnits[op.h] !== clusters[op.c]) {
+                            chip.title = deviationNote(clusters[op.c], heardUnits[op.h]);
+                        }
+                        chips.appendChild(chip);
+                        if (op.h !== undefined && heardUnits[op.h] !== clusters[op.c]) {
+                            const note = document.createElement('span');
+                            note.className = 'cmp-note';
+                            note.textContent = '(' + heardUnits[op.h] + ')';
+                            chips.appendChild(note);
+                        }
+                    });
+                    box.appendChild(chips);
+                    container.appendChild(box);
+                });
+            }
+
+            async function compareCurrent(result) {
+                const card = document.getElementById('compare-card');
+                const s = Number(document.getElementById('surah').value);
+                const a = Number(document.getElementById('ayah').value);
+                const canon = await canonFor(s, a);
+                if (!canon) {
+                    card.hidden = true;
+                    return;
+                }
+                renderCompare(canon, result.units, s, a);
+                card.hidden = false;
+            }
+
+            function currentAyaText() {
+                if (!suras) {
+                    return '';
+                }
+                const s = Number(document.getElementById('surah').value);
+                const a = Number(document.getElementById('ayah').value);
+                children: {
+                    const sura = suras[s - 1];
+                    if (!sura) {
+                        break children;
+                    }
+                    if (a === 0) {
+                        return sura.getAttribute('name') + ' — البسملة';
+                    }
+                    const aya = sura.children[a - 1];
+                    return aya ? (sura.getAttribute('name') + ' ' + a + ' — ' + aya.getAttribute('text')) : '';
+                }
+                return '';
+            }
+
+            async function runFileTest() {
+                document.getElementById('file-test').disabled = true;
+                try {
+                    await loadModel();
+                    const reciter = document.getElementById('reciter').value;
+                    const s = Number(document.getElementById('surah').value);
+                    const a = Number(document.getElementById('ayah').value);
+                    const pad = function (v) { return String(v).padStart(3, '0'); };
+                    const url = AUDIO_BASE + encodeURIComponent(reciter) + '/' + pad(s) + pad(a) + '.mp3';
+                    setStatus('تنزيل ' + url + ' …');
+                    const buf = await fetch(url).then(function (r) {
+                        if (!r.ok) {
+                            throw new Error('HTTP ' + r.status);
+                        }
+                        return r.arrayBuffer();
+                    });
+                    setStatus('تحليل …');
+                    const samples = await decodeFile(buf);
+                    const result = await transcribe(samples);
+                    show(result);
+                    setStatus('تم');
+                } catch (error) {
+                    setStatus('خطأ: ' + error.message);
+                } finally {
+                    document.getElementById('file-test').disabled = false;
+                }
+            }
+
+            /* ---------- الميكروفون ------------------------------------------ */
+
+            let micCtx = null;
+            let micStream = null;
+            let micProc = null;
+            let micChunks = [];
+            let micRecording = false;
+
+            async function startMic() {
+                try {
+                    await loadModel();
+                    setStatus('…جارٍ التسجيل — انطق ثم اضغط إيقاف');
+                    micStream = await navigator.mediaDevices.getUserMedia({
+                        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+                    });
+                    micCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const source = micCtx.createMediaStreamSource(micStream);
+                    micProc = micCtx.createScriptProcessor(4096, 1, 1);
+                    micChunks = [];
+                    micProc.onaudioprocess = function (event) {
+                        micChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+                    };
+                    source.connect(micProc);
+                    micProc.connect(micCtx.destination);
+                    micRecording = true;
+                    document.getElementById('mic-start').disabled = true;
+                    document.getElementById('mic-stop').disabled = false;
+                    document.getElementById('mic-state').textContent = 'تسجيل…';
+                } catch (error) {
+                    setStatus('تعذّر فتح الميكروفون: ' + error.message);
+                }
+            }
+
+            async function stopMic() {
+                if (!micRecording || !micProc) {
+                    return;
+                }
+                micRecording = false;
+                micProc.disconnect();
+                micStream.getTracks().forEach(function (t) { t.stop(); });
+                const rate = micCtx.sampleRate;
+                micCtx.close().catch(function () { });
+                document.getElementById('mic-start').disabled = false;
+                document.getElementById('mic-stop').disabled = true;
+                document.getElementById('mic-state').textContent = '';
+                let total = 0;
+                micChunks.forEach(function (c) { total += c.length; });
+                const joined = new Float32Array(total);
+                let at = 0;
+                micChunks.forEach(function (c) { joined.set(c, at); at += c.length; });
+                setStatus('…جارٍ التحليل');
+                try {
+                    const samples = await to16k(joined, rate);
+                    const result = await transcribe(samples);
+                    show(result);
+                    setStatus('تم');
+                } catch (error) {
+                    setStatus('خطأ: ' + error.message);
+                }
+            }
+
+            /* ---------- التهيئة --------------------------------------------- */
+
+            (async function init() {
+                try {
+                    const raw = await fetch(AUDIO_BASE + 'reciters.json').then(function (r) { return r.json(); });
+                    const list = Array.isArray(raw) ? raw : (raw.reciters || []);
+                    const reciter = document.getElementById('reciter');
+                    list.forEach(function (item) {
+                        const id = typeof item === 'string' ? item : (item.id || item.folder || item.name);
+                        const opt = document.createElement('option');
+                        opt.value = id;
+                        opt.textContent = (item && item.name) || id;
+                        reciter.appendChild(opt);
+                    });
+                } catch (error) { /* القائمة اختيارية */ }
+
+                try {
+                    const xml = await fetch('../../QuranText/Quran/quran-uthmani.xml').then(function (r) { return r.text(); });
+                    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+                    suras = doc.querySelectorAll('sura');
+                    const select = document.getElementById('surah');
+                    suras.forEach(function (sura, index) {
+                        const opt = document.createElement('option');
+                        opt.value = String(index + 1);
+                        opt.textContent = (index + 1) + '. ' + (sura.getAttribute('name') || '');
+                        select.appendChild(opt);
+                    });
+                } catch (error) { /* النص اختياري */ }
+
+                const refresh = function () { expected.textContent = currentAyaText(); };
+                document.getElementById('surah').addEventListener('change', refresh);
+                document.getElementById('ayah').addEventListener('input', refresh);
+                refresh();
+
+                document.getElementById('file-test').addEventListener('click', runFileTest);
+                document.getElementById('mic-start').addEventListener('click', startMic);
+                document.getElementById('mic-stop').addEventListener('click', stopMic);
+
+                loadModel();
+            })();
+
+            window.__phonemeSpike = {
+                transcribe: transcribe,
+                decodeFile: decodeFile,
+                loadModel: loadModel,
+                isReady: function () { return Boolean(session); },
+                canonFor: canonFor,
+                alignUnits: alignUnits,
+                unitInfo: unitInfo
+            };
+        })();
+    </script>
+</body>
+
+</html>

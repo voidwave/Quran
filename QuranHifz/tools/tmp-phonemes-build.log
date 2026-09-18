@@ -1,0 +1,31 @@
+build v2 (clusters) — quran-transcript ?
+vocab: 250 tokens, max len 6
+
+== sizes ==
+total: 1885695 bytes (1.80 MB)
+largest: [(2, 286, 144343), (4, 176, 89047), (3, 200, 82812), (7, 206, 80788), (6, 165, 71842), (5, 120, 65970)]
+
+== validation ==
+ayat: 6236, clusters: 311878, words: 77433
+tokenization failures: 0
+word-count mismatches (len(l) vs uthmani_words): 0
+empty word slices (word got no cluster): 0 (0.000%)
+
+== samples ==
+1:1  c='بِ س مِ للَ اا هِ ررَ ح مَ اا نِ ررَ حِ ۦۦۦۦ م'
+       l=[3, 3, 5, 4] (w=4)
+1:4  c='مَ اا لِ كِ يَ و مِ ددِ ۦۦۦۦ ن'
+       l=[4, 3, 3] (w=3)
+2:1  c='ءَ لِ ف لَ اااااا ممممِ ۦۦۦۦۦۦ م'
+       l=[8] (w=1)
+2:2  c='ذَ اا لِ كَ ل كِ تَ اا بُ لَ اا رَ ي بَ فِ ۦۦ هِ هُ دَ للِ ل مُ تتَ قِ ۦۦۦۦ ن'
+       l=[4, 5, 2, 3, 3, 2, 7] (w=7)
+27:30  c='ءِ ننننَ هُ ۥۥ مِ ںںں سُ لَ ي مَ اا نَ وَ ءِ ننننَ هُ ۥۥ بِ س مِ للَ اا هِ ررَ ح مَ اا نِ ررَ حِ ۦۦۦۦ م'
+       l=[4, 2, 6, 5, 3, 3, 5, 4] (w=8)
+112:1  c='قُ ل هُ وَ للَ اا هُ ءَ حَ دڇ'
+       l=[2, 2, 3, 3] (w=4)
+114:6  c='مِ نَ ل جِ ننننَ تِ وَ ننننَ اااا س'
+       l=[2, 4, 4] (w=3)
+
+elapsed: 64.3s
+DONE -> d:\voidwave.com apps\Quran\QuranText\QuranPhonemes

@@ -43,14 +43,6 @@
         'يس', 'ص', 'حم', 'عسق', 'حمعسق', 'ق', 'ن'
     ]);
 
-    /* Phrases a reciter commonly says although they are not part of the
-     * selected passage (the start-of-recitation basmala / isti'adha). */
-    const IGNORE_PHRASES = [
-        ['بسم', 'الله', 'الرحمان', 'الرحيم'],
-        ['بسم', 'الله', 'الرحمن', 'الرحيم'],
-        ['اعوذ', 'بالله', 'من', 'الشيطان', 'الرجيم']
-    ];
-
     /* The short-vowel marks the pronunciation check compares. */
     const VOWEL_MARKS = new Set(['\u064E', '\u064F', '\u0650', '\u0652']);
 
@@ -105,6 +97,12 @@
         // Uniform letter shapes.
         word = word.replace(/[\u0622\u0623\u0625\u0671-\u0673\u0675]/g, 'ا');
         word = word.replace(/[\u0626\u0624]/g, 'ء');
+        // The stand-alone hamza written before an alef («ءَاثَـٰرِهِمْ»،
+        // «قُرْءَان»، «رَءَاهُ») is the Uthmani way of writing the madda or
+        // the initial glottal: modern spellings fold it into «آ» → «ا»
+        // («آثَارِهِمْ»، «قرآن»، «رآه»). Fold the pair the same way on every
+        // side — recognizers may write either form.
+        word = word.replace(/\u0621\u0627/g, '\u0627');
         word = word.replace(/\u0629/g, 'ه');
         word = word.replace(/\u0649/g, 'ي');
 
@@ -144,6 +142,14 @@
                 });
             });
         });
+        /* The Uthmani print writes «يَـٰٓأَيُّهَا» as one word; recognizers
+           split it into «يا» + «أيها» (measured on canonical audio). Join
+           the pair back so it can match the expected word. */
+        for (let i = parts.length - 2; i >= 0; i -= 1) {
+            if (parts[i].norm === 'يا' && parts[i + 1].norm === 'ايها') {
+                parts.splice(i, 2, { norm: 'ياايها', sig: '' });
+            }
+        }
         return parts;
     }
 
@@ -270,9 +276,11 @@
 
     /**
      * Scores how well a heard word matches an expected word, 0..1.
-     * 0 means "not the same word". The edit budget grows with word length so
-     * that short words must be almost exact while long words tolerate the
-     * one-or-two letter noise a recognizer adds ("الرحمان"/"الرحمن").
+     * 0 means "not the same word". Matching is deliberately perfect: the
+     * only tolerances are the alef spelling conventions (below) and the
+     * recognizer's ending/article confusion (endingRescue). Any other
+     * difference — a letter missing, added or replaced — makes a DIFFERENT
+     * word and must not pass («مالك» vs «مالكم»، «أنعمت» vs «أنقمت»).
      */
     function wordScore(heard, expected) {
         if (!heard || !expected) {
@@ -297,20 +305,15 @@
             return 0.86;
         }
 
-        const longest = Math.max(heard.length, expected.length);
-        const distance = levenshtein(heard, expected);
-        const budget = longest <= 2 ? 0 : (longest <= 8 ? 1 : 2);
-        if (distance > budget) {
-            /* The recognizer also smears the END of the word («الصالحات»
-             * heard as «الصالحين» or «صالحه»): when the article and the
-             * ending are all that differ, the word still counts — with a
-             * note (see the 'ending' op) so a wrong ending stays visible
-             * and a correct recitation is never refused for a guessed
-             * ending. */
-            return endingRescue(heard, expected) ? 0.84 : 0;
-        }
-
-        return 1 - distance / longest;
+        /* Every other difference is a real one: a missing, added or
+           replaced letter is a different word («مالكم» must not pass for
+           «مالك»، «أنقمت» not for «أنعمت» — "it needs to be perfect").
+           The one remaining tolerance is the recognizer's ending/article
+           confusion («الصالحات» heard as «الصالحين» or «صالحه»): the word
+           counts, VISIBLY (see the 'ending' op) — so a wrong ending stays
+           exposed and a correct recitation is not refused for a guessed
+           ending. */
+        return endingRescue(heard, expected) ? 0.84 : 0;
     }
 
     /* -----------------------------------------------------------------------
@@ -467,42 +470,58 @@
     }
 
     /* -----------------------------------------------------------------------
-     * Ignorable phrases (basmala / isti'adha)
+     * Opening phrases (basmala / isti'adha)
      * -------------------------------------------------------------------- */
 
+    /* Phrases a reciter commonly says although they are not part of the
+     * selected passage (the start-of-recitation basmala / isti'adha). */
+    const OPENING_PHRASES = [
+        ['بسم', 'الله', 'الرحمان', 'الرحيم'],
+        ['بسم', 'الله', 'الرحمن', 'الرحيم'],
+        ['اعوذ', 'بالله', 'من', 'الشيطان', 'الرجيم']
+    ];
+
     /**
-     * True when the expected words begin with this opening phrase (any
-     * accepted spelling), i.e. the passage itself starts with it.
+     * True when the phrase occurs somewhere in the expected words. The
+     * basmala is real text inside 1:1 and 27:30, so a phrase that is part
+     * of the passage must never be dropped from the heard stream — the
+     * 2026-09-18 An-Naml bug was exactly that (the words were erased and
+     * the tracker stalled on «بسم»).
      */
-    function startsWithPhrase(expectedNorm, phrase) {
-        if (expectedNorm.length < phrase.length) {
-            return false;
-        }
-        for (let k = 0; k < phrase.length; k += 1) {
-            if (wordScore(expectedNorm[k], phrase[k]) < STRONG_SIM) {
-                return false;
+    function itemsHavePhrase(items, phrase) {
+        const flat = [];
+        items.forEach(function (item) {
+            if (!item.meta) {
+                flat.push(item.norm);
+            }
+        });
+        for (let start = 0; start + phrase.length <= flat.length; start += 1) {
+            let same = true;
+            for (let k = 0; k < phrase.length; k += 1) {
+                if (wordScore(flat[start + k], phrase[k]) < STRONG_SIM) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) {
+                return true;
             }
         }
-        return true;
+        return false;
     }
 
     /**
-     * Removes common opening phrases (basmala / isti'adha) from a heard-token
-     * list — but only when the expected text just ahead does not itself begin
-     * with one (a passage that starts at surah 1 ayah 1 legitimately expects
-     * the basmala). The signatures are spliced in lockstep so indices stay
-     * aligned. Returns { words, sigs }.
+     * Removes occurrences of the given phrases from a heard-token list (the
+     * signatures are spliced in lockstep so indices stay aligned). Only
+     * called with phrases the passage does NOT contain: saying them is
+     * ordinary noise, and leaving them in raised false nags — a stray
+     * «الله» match ahead of the cursor produced «stay on the word», and an
+     * unmatched basmala produced «لم أفهم». Returns { words, sigs }.
      */
-    function stripIgnorable(heard, sigs, expectedNorm) {
+    function stripPhrases(heard, sigs, phrases) {
         const tokens = heard.slice();
-        const tokenSigs = Array.isArray(sigs) ? sigs.slice() : [];
-        const expectsOpening = IGNORE_PHRASES.some(function (phrase) {
-            return startsWithPhrase(expectedNorm, phrase);
-        });
-        if (expectsOpening) {
-            return { words: tokens, sigs: tokenSigs };
-        }
-        IGNORE_PHRASES.forEach(function (phrase) {
+        const tokenSigs = sigs.slice();
+        phrases.forEach(function (phrase) {
             for (let start = tokens.length - phrase.length; start >= 0; start -= 1) {
                 let same = true;
                 for (let k = 0; k < phrase.length; k += 1) {
@@ -569,6 +588,14 @@
             return item.meta ? 'meta' : 'pending';
         });
 
+        /* Opening phrases the reciter may add out of habit although the
+           passage itself never contains them: these are dropped from every
+           heard chunk (see finalize). Phrases the passage does contain are
+           left in place — they are real words and must match where expected. */
+        const strayPhrases = OPENING_PHRASES.filter(function (phrase) {
+            return !itemsHavePhrase(items, phrase);
+        });
+
         const tracker = {
             items: items,
             states: states,
@@ -591,16 +618,6 @@
             if (!items[index].meta) {
                 states[index] = state;
             }
-        }
-
-        function expectedNorm(fromIdx, count) {
-            const out = [];
-            for (let i = fromIdx; i < items.length && out.length < count; i += 1) {
-                if (!items[i].meta) {
-                    out.push(items[i].norm);
-                }
-            }
-            return out;
         }
 
         /**
@@ -1027,9 +1044,11 @@
             const heardParts = flattenTokenParts(rawTokens);
             let heardWords = heardParts.map(function (part) { return part.norm; });
             let heardSigs = heardParts.map(function (part) { return part.sig; });
-            const stripped = stripIgnorable(heardWords, heardSigs, expectedNorm(tracker.cursor, 6));
-            heardWords = stripped.words;
-            heardSigs = stripped.sigs;
+            if (strayPhrases.length) {
+                const cleaned = stripPhrases(heardWords, heardSigs, strayPhrases);
+                heardWords = cleaned.words;
+                heardSigs = cleaned.sigs;
+            }
 
             if (!heardWords.length) {
                 return ops; // silence — nothing to say about it
@@ -1102,6 +1121,47 @@
             return [];
         };
 
+        /**
+         * Settlement for the phoneme engine: the listed words were recognised
+         * from their sound units (index = item index). The same chain rule as
+         * the text tracker applies — only an unbroken run of wanted words that
+         * starts exactly at the cursor settles.
+         */
+        tracker.settleWords = function (indices) {
+            const ops = [];
+            const settled = [];
+            if (tracker.done) {
+                return { ops: ops, settled: settled };
+            }
+            const wanted = {};
+            (indices || []).forEach(function (index) {
+                if (index >= 0 && index < items.length) {
+                    wanted[index] = true;
+                }
+            });
+            for (let i = tracker.cursor; i < items.length; i += 1) {
+                if (items[i].meta || states[i] !== 'pending') {
+                    continue;
+                }
+                if (!wanted[i]) {
+                    break;
+                }
+                states[i] = 'ok';
+                tracker.stats.strong += 1;
+                if (i > tracker._lastMatched) {
+                    tracker._lastMatched = i;
+                }
+                settled.push(i);
+                ops.push({ op: 'ok', i: i });
+            }
+            const next = firstPendingFrom(tracker.cursor);
+            if (next !== tracker.cursor) {
+                tracker.cursor = next;
+                ops.push({ op: 'cursor', i: next });
+            }
+            return { ops: completionOps(ops), settled: settled };
+        };
+
         tracker.reset = function () {
             items.forEach(function (item, i) {
                 if (!item.meta) {
@@ -1136,7 +1196,6 @@
     return {
         STRONG_SIM: STRONG_SIM,
         MUQATTAAT: MUQATTAAT,
-        IGNORE_PHRASES: IGNORE_PHRASES,
         normalizeToken: normalizeToken,
         vowelSignature: vowelSignature,
         endingRescue: endingRescue,
@@ -1148,7 +1207,6 @@
         levenshtein: levenshtein,
         wordScore: wordScore,
         alignUtterance: alignUtterance,
-        stripIgnorable: stripIgnorable,
         createTracker: createTracker
     };
 });

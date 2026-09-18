@@ -1263,24 +1263,36 @@
         <h2 class="settings-panel__title">إعدادات الجلسة</h2>
 
         <div class="setting">
-            <span class="setting__label">طريقة التصحيح عند الخطأ</span>
-            <div class="segmented" role="radiogroup" aria-label="طريقة التصحيح">
-                <label id="feedback-direct-label"><input type="radio" name="feedback" value="direct"
-                        checked>فوري</label>
-                <label id="feedback-hint-label"><input type="radio" name="feedback" value="hint">تلميح أولًا</label>
-            </div>
-            <span class="setting__hint">«فوري»: تظهر الكلمة الصحيحة فور ملاحظة الخطأ. «تلميح أولًا»: يظهر أول حرف
-                فقط حتى تعيد المحاولة.</span>
+            <span class="setting__label">محرّك التعرّف</span>
+            <select id="engine-select" class="select" aria-label="محرّك التعرّف">
+                <option value="phoneme" selected>الفونيمات فقط (الافتراضي — مع فحص التجويد)</option>
+                <option value="int8">FastConformer int8 (تعرّف على الكلمات كاملة)</option>
+            </select>
+            <span class="setting__hint">«الفونيمات فقط» (الافتراضي): يتتبّع تلاوتك من الأصوات مباشرة — مع فحص
+                الحركات والمدود والشدة — بنموذج Quran-Lab v3.1. «FastConformer int8»: تعرّف على الكلمات
+                كاملة بنموذج الموقع الصغير، دون فحص تجويد.</span>
         </div>
 
         <div class="setting">
-            <span class="setting__label">حساسية المطابقة</span>
-            <select id="strictness-select" class="select" aria-label="حساسية المطابقة">
-                <option value="lenient">متساهلة — تسامح أكبر مع النطق</option>
-                <option value="balanced" selected>متوازنة — الوضع الموصى به</option>
-                <option value="strict">صارمة — تدقيق أقرب</option>
+            <span class="setting__label">نموذج الفونيمات</span>
+            <select id="phoneme-model-select" class="select" aria-label="نموذج الفونيمات">
+                <option value="v31-int8" selected>zipformer v3.1 int8 (موصى به — أخف وأسرع)</option>
+                <option value="v31-fp32">zipformer v3.1 fp32 (الأكبر — أدقّ، أبطأ)</option>
             </select>
-            <span class="setting__hint">تتحكم في مقدار الفرق المسموح قبل اعتبار الكلمة خطأً.</span>
+            <span class="setting__hint" id="proncheck-status">نموذج Quran-Lab v3.1 (رخصة NPL-1.2 غير ربحية):
+                أدقّ في الحروف والمدود والتجويد، ويُحمَّل مرة واحدة. النسخة fp32 أكبر (‏~٢٥٠ م.ب) وأبطأ.
+                تنبيه: التقييم الآلي للتجويد قد يخطئ ولا يغني عن معلّم متقن.</span>
+        </div>
+
+        <div class="setting">
+            <span class="setting__label">طريقة التصحيح عند الخطأ</span>
+            <div class="segmented" role="radiogroup" aria-label="طريقة التصحيح">
+                <label id="feedback-direct-label"><input type="radio" name="feedback" value="direct">فوري</label>
+                <label id="feedback-hint-label"><input type="radio" name="feedback" value="hint" checked>تلميح
+                    أولًا</label>
+            </div>
+            <span class="setting__hint">«فوري»: تظهر الكلمة الصحيحة فور ملاحظة الخطأ. «تلميح أولًا»: يظهر أول حرف
+                فقط حتى تعيد المحاولة.</span>
         </div>
 
         <div class="setting">
@@ -1302,6 +1314,7 @@
 
     <script src="memorize-core.js"></script>
     <script src="memorize-asr.js"></script>
+    <script src="phoneme-check.js"></script>
     <script src="memorize.js"></script>
     <script src="../pwa.js"></script>
 </body>

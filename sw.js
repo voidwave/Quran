@@ -29,7 +29,7 @@
  * is deleted on activate. The data/audio caches survive version bumps.
  */
 
-const VERSION = 'v9';
+const VERSION = 'v18';
 
 const SHELL_CACHE = 'quran-shell-' + VERSION;
 const DATA_CACHE = 'quran-data';
@@ -54,8 +54,11 @@ const SHELL_FILES = [
     'QuranHifz/memorize-core.js',
     'QuranHifz/memorize-asr.js',
     'QuranHifz/memorize-asr-worker.js',
+    'QuranHifz/quran-gop.js',
     'QuranHifz/ort-nemo-asr.js',
     'QuranHifz/ort-nemo-asr-worker.js',
+    'QuranHifz/phoneme-check.js',
+    'QuranHifz/phoneme-asr-worker.js',
     'manifest.webmanifest',
     'icons/icon-192.png',
     'icons/icon-512.png',
@@ -88,8 +91,11 @@ const SHELL_SUFFIXES = [
     '/QuranHifz/memorize-core.js',
     '/QuranHifz/memorize-asr.js',
     '/QuranHifz/memorize-asr-worker.js',
+    '/QuranHifz/quran-gop.js',
     '/QuranHifz/ort-nemo-asr.js',
     '/QuranHifz/ort-nemo-asr-worker.js',
+    '/QuranHifz/phoneme-check.js',
+    '/QuranHifz/phoneme-asr-worker.js',
     '/manifest.webmanifest',
     '/icons/icon-192.png',
     '/icons/icon-512.png',
