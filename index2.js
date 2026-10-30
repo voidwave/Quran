@@ -54,7 +54,12 @@ let positionTimer = null;
 
 /* Line pitch of the printed page: quran.com lays a 43.72px glyph on a 76.19px
  * line, i.e. 1.743. The page scales with this factor. */
-const LINE_RATIO = 1.743;
+const PRINT_LINE_RATIO = 1.743;
+
+/* A little more air between the lines than the print has. The glyphs keep
+ * their size; only the pitch (and so the page) grows. */
+const LINE_SPACING = 1.15;
+const LINE_RATIO = PRINT_LINE_RATIO * LINE_SPACING;
 
 /* A surah banner takes two of the 15 printed lines. */
 const BANNER_LINES = 2;
@@ -451,7 +456,7 @@ function sizeForCard(card, rows) {
     const byWidth = (inner / widest) * REFERENCE * 0.997;
     /* The sheet of the print is taller than it is wide, so a wide page does not
      * simply make the glyphs bigger. */
-    const bySheet = (inner / PAGE_ASPECT) / (PRINTED_LINES * LINE_RATIO);
+    const bySheet = (inner / PAGE_ASPECT) / (PRINTED_LINES * PRINT_LINE_RATIO);
     return Math.max(8, Math.min(byWidth, bySheet));
 }
 
