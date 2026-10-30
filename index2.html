@@ -584,7 +584,11 @@
             align-items: center;
             justify-content: center;
             gap: calc(var(--fs) * 0.06);
-            min-height: calc(var(--lh) * 2);
+            /* Some air above and below, taken out of the banner itself so it
+               still fills exactly two lines and the page height holds. */
+            margin-block: calc(var(--lh) * 0.12);
+            min-height: calc(var(--lh) * 1.76);
+            box-sizing: border-box;
             padding: calc(var(--fs) * 0.08) calc(var(--fs) * 0.5);
             border: 1.5px solid var(--paper-rule);
             border-radius: calc(var(--fs) * 0.3);
