@@ -23,9 +23,9 @@ const SOURCE_CATALOG = 'QuranText/catalog.json';
 const audioLib = window.QuranAudio || {
     source: path => Promise.resolve(path),
     setSource: (element, src) => { element.src = src; },
-    path: (reciterId, chapter, fileNumber) => '/QuranAudio/' + encodeURIComponent(reciterId) + '/'
+    path: (reciterId, chapter, fileNumber) => 'https://audio.3lm.org/' + encodeURIComponent(reciterId) + '/'
         + String(chapter).padStart(3, '0') + String(fileNumber).padStart(3, '0') + '.mp3',
-    reciters: () => fetch('/QuranAudio/reciters.json').then(response => {
+    reciters: () => fetch('https://audio.3lm.org/reciters.json').then(response => {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.json();
     })

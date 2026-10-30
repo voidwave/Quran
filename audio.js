@@ -32,9 +32,11 @@
 (function () {
     'use strict';
 
-    /* The audio page. Point it somewhere else (a full URL) while developing
-     * by setting window.QURAN_AUDIO_BASE before this script loads. */
-    var BASE = window.QURAN_AUDIO_BASE || '/QuranAudio/';
+    /* The audio page: the Cloudflare R2 bucket behind audio.3lm.org (the
+     * files outgrew GitHub Pages). Point it somewhere else (a full URL, or
+     * '/QuranAudio/' for tools/serve.js) while developing by setting
+     * window.QURAN_AUDIO_BASE before this script loads. */
+    var BASE = window.QURAN_AUDIO_BASE || 'https://audio.3lm.org/';
     var AUDIO_CACHE = 'quran-audio';
     var DATA_CACHE = 'quran-data';
 

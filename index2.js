@@ -40,9 +40,9 @@ const resume = window.QuranResume
 const audioLib = window.QuranAudio || {
     source: path => Promise.resolve(path),
     setSource: (element, src) => { element.src = src; },
-    path: (reciterId, chapter, fileNumber) => '/QuranAudio/' + encodeURIComponent(reciterId) + '/'
+    path: (reciterId, chapter, fileNumber) => 'https://audio.3lm.org/' + encodeURIComponent(reciterId) + '/'
         + String(chapter).padStart(3, '0') + String(fileNumber).padStart(3, '0') + '.mp3',
-    reciters: () => fetch('/QuranAudio/reciters.json').then(response => {
+    reciters: () => fetch('https://audio.3lm.org/reciters.json').then(response => {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.json();
     })
@@ -778,7 +778,7 @@ function playWord(word) {
  * pauses and resumes instead of restarting. */
 function playAyah(key) {
     if (!state.reciterId) {
-        showToast('لا توجد ملفات تلاوة — تأكّد من /QuranAudio/reciters.json.');
+        showToast('لا توجد ملفات تلاوة — تأكّد من audio.3lm.org/reciters.json.');
         return;
     }
     if (recitation.key === key) {
@@ -1095,7 +1095,7 @@ async function startRecitation(key) {
 /* Recites a whole surah: its basmala first, like the app does. */
 function playSurah(chapter) {
     if (!state.reciterId) {
-        showToast('لا توجد ملفات تلاوة — تأكّد من /QuranAudio/reciters.json.');
+        showToast('لا توجد ملفات تلاوة — تأكّد من audio.3lm.org/reciters.json.');
         return;
     }
     const info = state.chapterById.get(chapter);
@@ -1114,7 +1114,7 @@ function playSurah(chapter) {
 
 function toggleRecitation() {
     if (!state.reciterId) {
-        showToast('لا توجد ملفات تلاوة — تأكّد من /QuranAudio/reciters.json.');
+        showToast('لا توجد ملفات تلاوة — تأكّد من audio.3lm.org/reciters.json.');
         return;
     }
 
